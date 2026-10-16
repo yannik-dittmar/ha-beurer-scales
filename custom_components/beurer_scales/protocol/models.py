@@ -3,6 +3,8 @@
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from .metrics import Metric
+
 # The BF450 advertises the Weight Scale service (0x181D) byte-swapped, as 0x1D18;
 # its service data holds the pending-slot list (protocol doc §2).
 SWAPPED_WEIGHT_SCALE_UUID = "00001d18-0000-1000-8000-00805f9b34fb"
@@ -21,6 +23,9 @@ BATTERY_LEVEL_UUID = uuid16(0x2A19)
 # Starts every reading (§9.4b).
 WEIGHT_MEASUREMENT_UUID = uuid16(0x2A9D)
 BODY_COMPOSITION_UUID = uuid16(0x2A9C)
+# The BF450/BF451 custom measurement frames (§5.3).
+CUSTOM1_UUID = uuid16(0xFFF5)
+CUSTOM2_UUID = uuid16(0xFFF6)
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +43,10 @@ class ScaleModel:
     reading_uuids: tuple[str, ...] = (WEIGHT_MEASUREMENT_UUID, BODY_COMPOSITION_UUID)
     # Notifies 01 when a live reading has finished (§9.4), or None.
     live_reading_done_uuid: str | None = None
+    # The body-composition metrics the model measures; each gets an entity.
+    metrics: tuple[Metric, ...] = ()
+    # The unit of soft lean mass and body water mass in 0x2A9C (§5.2).
+    body_mass_resolution_kg: float = 0.005
 
 
 BF450 = ScaleModel(
@@ -48,10 +57,12 @@ BF450 = ScaleModel(
     reading_uuids=(
         WEIGHT_MEASUREMENT_UUID,
         BODY_COMPOSITION_UUID,
-        uuid16(0xFFF5),  # custom1
-        uuid16(0xFFF6),  # custom2
+        CUSTOM1_UUID,
+        CUSTOM2_UUID,
     ),
     live_reading_done_uuid=uuid16(0xFFF4),
+    metrics=tuple(Metric),
+    body_mass_resolution_kg=0.1,
 )
 MODELS: tuple[ScaleModel, ...] = (BF450,)
 
