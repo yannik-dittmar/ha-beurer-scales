@@ -19,6 +19,7 @@ from custom_components.beurer_scales.const import DOMAIN
 
 from .conftest import SCALE_ADDRESS, wake_scale
 from .fake_scale import FakeScale
+from .test_create_scale_user import step_off_and_on, submit_and_wake
 from .test_scale_user_repairs import (
     anna_id,
     scale_issues,
@@ -209,25 +210,38 @@ async def test_reentering_a_wrong_code_again_shows_an_error(
     assert entry.subentries[anna_id(entry)].data["consent_code"] == 4321
 
 
-async def test_create_again_recreates_the_scale_user_with_its_profile(
+async def recreate_and_teach(
+    hass: HomeAssistant, flow_id: str, scale: FakeScale
+) -> dict[str, Any]:
+    """Confirm creating again, wake the scale, teach once and finish."""
+    result = await submit_and_wake(hass, flow_id, scale, {})
+    assert result["step_id"] == "teach", result
+    assert scale.client is not None
+    assert scale.client.consented_slot is not None
+    result = await step_off_and_on(hass, flow_id, scale, scale.client.consented_slot)
+    assert result["step_id"] == "teach_more", result
+    result = await hass.config_entries.subentries.async_configure(
+        flow_id, {"next_step_id": "teach_done"}
+    )
+    await hass.async_block_till_done()
+    return result
+
+
+async def test_create_again_recreates_and_teaches_the_scale_user(
     hass: HomeAssistant, fake_scale: FakeScale
 ) -> None:
-    """The scale user is registered again with the stored profile and a new code."""
+    """The scale user is registered again with the stored profile and taught."""
     entry = await deleted(hass, fake_scale)
     subentry_id = anna_id(entry)
     flow = await forwarded_flow(hass, f"scale_user_deleted_{subentry_id}", "create")
     assert flow["step_id"] == "repair_create"
 
-    result = await hass.config_entries.subentries.async_configure(flow["flow_id"], {})
-    assert result["type"] is FlowResultType.SHOW_PROGRESS
-    assert result["progress_action"] == "create"
-    await wake_scale(hass, fake_scale)
-    result = await hass.config_entries.subentries.async_configure(flow["flow_id"])
-    await hass.async_block_till_done()
+    result = await recreate_and_teach(hass, flow["flow_id"], fake_scale)
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "scale_user_repaired"
     subentry = entry.subentries[subentry_id]
+    assert subentry.title == "Anna"
     # Slot 1 is taken, so the scale gives Anna slot 2 again.
     assert subentry.data["slot"] == 2
     created = fake_scale.users[2]
@@ -236,6 +250,8 @@ async def test_create_again_recreates_the_scale_user_with_its_profile(
     assert created.height_cm == 180
     assert scale_issues(ir.async_get(hass)) == {}
     assert not fake_scale.connected
+    # The teaching reading reaches Anna's sensors.
+    assert state(hass, WEIGHT).state == "78.4"
 
 
 async def test_create_again_into_another_slot_keeps_the_entities(
@@ -247,17 +263,13 @@ async def test_create_again_into_another_slot_keeps_the_entities(
     weight_entity = entity_id(hass, WEIGHT)
     flow = await forwarded_flow(hass, f"factory_reset_{subentry_id}", "create")
 
-    await hass.config_entries.subentries.async_configure(flow["flow_id"], {})
-    await wake_scale(hass, fake_scale)
-    await hass.config_entries.subentries.async_configure(flow["flow_id"])
-    await hass.async_block_till_done()
+    await recreate_and_teach(hass, flow["flow_id"], fake_scale)
 
     subentry = entry.subentries[subentry_id]
     assert subentry.data["slot"] == 1
     assert subentry.unique_id == "slot_1"
     assert set(fake_scale.users) == {1}
     registry = er.async_get(hass)
-    assert registry.async_get(weight_entity) is not None
     assert (
         registry.async_get_entity_id("sensor", DOMAIN, f"{SCALE_ADDRESS}_slot_1_weight")
         == weight_entity
@@ -288,9 +300,7 @@ async def test_create_again_into_a_slot_another_scale_user_holds_is_undone(
     await hass.async_block_till_done()
     flow = await forwarded_flow(hass, f"factory_reset_{anna}", "create")
 
-    await hass.config_entries.subentries.async_configure(flow["flow_id"], {})
-    await wake_scale(hass, fake_scale)
-    result = await hass.config_entries.subentries.async_configure(flow["flow_id"])
+    result = await submit_and_wake(hass, flow["flow_id"], fake_scale, {})
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "slot_held_by_other_scale_user"

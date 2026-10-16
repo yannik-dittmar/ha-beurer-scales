@@ -38,3 +38,7 @@ class UnexpectedResponse(ScaleError):
 
 class NoFreeSlot(ScaleError):
     """Every slot on the scale holds a scale user; none can be registered."""
+
+
+class TeachingTimeout(ScaleTimeout):
+    """Nobody stepped on the scale while teaching waited for the first reading."""
