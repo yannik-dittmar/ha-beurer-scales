@@ -11,6 +11,7 @@ import contextlib
 import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
 
@@ -35,7 +36,13 @@ from .frames import (
     decode_ucp_response,
     decode_user_list_frame,
 )
-from .models import CURRENT_TIME_UUID, USER_CONTROL_POINT_UUID, ScaleModel
+from .models import (
+    BATTERY_LEVEL_UUID,
+    CURRENT_TIME_UUID,
+    USER_CONTROL_POINT_UUID,
+    ScaleModel,
+)
+from .readings import Reading, ReadingAssembler
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -44,6 +51,9 @@ SESSION_TIMEOUT = 40.0
 # A single request/response round trip; GATT ops take ~0.4 s on a BF450.
 RESPONSE_TIMEOUT = 8.0
 CONNECT_ATTEMPTS = 2
+# Readings are complete once the scale has sent nothing for this long. Frames of a
+# reading arrive ~0.4 s apart, the first ~0.4 s after consent (§9.2, §9.4b).
+QUIET_PERIOD = 2.5
 _DISCONNECT_TIMEOUT = 5.0
 
 
@@ -70,6 +80,18 @@ class GattClient(Protocol):
     async def disconnect(self) -> Any:
         """Close the link."""
         ...
+
+    async def read_gatt_char(self, char_specifier: str) -> bytearray:
+        """Read a characteristic."""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class SyncResult:
+    """What one sync of a scale user collected."""
+
+    readings: list[Reading]
+    battery_percent: int | None
 
 
 @asynccontextmanager
@@ -130,6 +152,10 @@ class ScaleSession:
         self._model = model
         self._response_timeout = response_timeout
         self._notifications: dict[str, asyncio.Queue[bytes]] = {}
+        self._readings = ReadingAssembler()
+        self._readings_returned = 0
+        self._reading_frame = asyncio.Event()
+        self._reading_subscriptions: set[str] = set()
 
     async def set_time(self, now: datetime) -> None:
         """Set the scale's clock. Pass local time: the scale has no time zone."""
@@ -170,6 +196,74 @@ class ScaleSession:
         )
         if response.result is not UcpResult.SUCCESS:
             raise ConsentRejected(f"slot {slot}: {response.result.name}")
+
+    # --- Syncing readings (protocol doc §3, §9.4b) ---
+
+    async def sync(
+        self,
+        slot: int,
+        consent_code: int,
+        now: datetime,
+        *,
+        quiet_period: float | None = None,
+    ) -> SyncResult:
+        """Collect a scale user's readings: set time, subscribe, consent, collect,
+        read the battery. Raises ConsentRejected."""
+        await self.set_time(now)
+        await self.subscribe_readings()
+        await self.consent(slot, consent_code)
+        readings = await self.collect_readings(quiet_period=quiet_period)
+        return SyncResult(readings=readings, battery_percent=await self.read_battery())
+
+    async def subscribe_readings(self) -> None:
+        """Subscribe to the measurement characteristics. Do this before consent:
+        the scale pushes the stored readings right after it (§3)."""
+        uuids = list(self._model.reading_uuids)
+        if self._model.live_reading_done_uuid:
+            uuids.append(self._model.live_reading_done_uuid)
+        for uuid in uuids:
+            if uuid in self._reading_subscriptions:
+                continue
+
+            def on_notify(_sender: Any, data: bytearray, uuid: str = uuid) -> None:
+                # FFF4 `01` only says a live reading has finished.
+                if uuid != self._model.live_reading_done_uuid:
+                    self._readings.add(uuid, bytes(data))
+                self._reading_frame.set()
+
+            try:
+                await self._client.start_notify(uuid, on_notify)
+            except BleakError as err:
+                raise ScaleConnectionError(f"subscribe {uuid}: {err}") from err
+            self._reading_subscriptions.add(uuid)
+
+    async def collect_readings(
+        self, *, quiet_period: float | None = None
+    ) -> list[Reading]:
+        """Wait until the scale goes quiet; return the readings since the last call."""
+        if quiet_period is None:
+            quiet_period = QUIET_PERIOD
+        while True:
+            self._reading_frame.clear()
+            try:
+                async with asyncio.timeout(quiet_period):
+                    await self._reading_frame.wait()
+            except TimeoutError:
+                break
+        readings = self._readings.readings()
+        new, self._readings_returned = (
+            readings[self._readings_returned :],
+            len(readings),
+        )
+        return new
+
+    async def read_battery(self) -> int | None:
+        """Read the battery level in percent; None if the scale doesn't say."""
+        try:
+            data = await self._client.read_gatt_char(BATTERY_LEVEL_UUID)
+        except BleakError as err:
+            raise ScaleConnectionError(f"read battery: {err}") from err
+        return data[0] if len(data) == 1 and data[0] <= 100 else None
 
     async def disconnect(self) -> None:
         """Close the connection. Never raises."""

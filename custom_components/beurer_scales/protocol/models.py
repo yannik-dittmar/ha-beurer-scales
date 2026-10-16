@@ -16,6 +16,10 @@ def uuid16(short: int) -> str:
 # Characteristics every BF600-family model shares (protocol doc §1).
 CURRENT_TIME_UUID = uuid16(0x2A2B)
 USER_CONTROL_POINT_UUID = uuid16(0x2A9F)
+BATTERY_LEVEL_UUID = uuid16(0x2A19)
+# Starts every reading (§9.4b).
+WEIGHT_MEASUREMENT_UUID = uuid16(0x2A9D)
+BODY_COMPOSITION_UUID = uuid16(0x2A9C)
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,10 +32,25 @@ class ScaleModel:
     user_list_uuid: str
     # Verified on real hardware; other models get an "untested" warning.
     verified: bool = False
+    # The characteristics a reading arrives on, in the order the scale sends them;
+    # the first is always the weight (§5).
+    reading_uuids: tuple[str, ...] = (WEIGHT_MEASUREMENT_UUID, BODY_COMPOSITION_UUID)
+    # Notifies 01 when a live reading has finished (§9.4), or None.
+    live_reading_done_uuid: str | None = None
 
 
 BF450 = ScaleModel(
-    name="BF450", slot_count=8, user_list_uuid=uuid16(0xFFF1), verified=True
+    name="BF450",
+    slot_count=8,
+    user_list_uuid=uuid16(0xFFF1),
+    verified=True,
+    reading_uuids=(
+        WEIGHT_MEASUREMENT_UUID,
+        BODY_COMPOSITION_UUID,
+        uuid16(0xFFF5),  # custom1
+        uuid16(0xFFF6),  # custom2
+    ),
+    live_reading_done_uuid=uuid16(0xFFF4),
 )
 MODELS: tuple[ScaleModel, ...] = (BF450,)
 
