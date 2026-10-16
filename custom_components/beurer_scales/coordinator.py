@@ -4,6 +4,10 @@ One coordinator per config entry (scale). When an advertisement lists a managed
 slot as pending, it connects and syncs that slot (design §5). Every reading,
 whether from a sync or handed over by a flow that consented, goes through
 `async_process_readings`, the single pipeline to the scale user's entities.
+
+Scale users removed in HA are deleted on the scale at the next wake, once that
+wake's weigh-in is final (design §4.3): in the same connection as a sync, or
+~25 s after the wake started.
 """
 
 import logging
@@ -23,7 +27,8 @@ from homeassistant.util import dt as dt_util
 
 from .connection import async_open_session
 from .const import CONF_CONSENT_CODE, CONF_MODEL, CONF_SLOT, DOMAIN, SUBENTRY_SCALE_USER
-from .protocol.errors import ScaleError
+from .pending_deletions import PendingDeletions
+from .protocol.errors import ConsentRejected, ScaleError
 from .protocol.frames import decode_pending_slots
 from .protocol.models import (
     SWAPPED_WEIGHT_SCALE_UUID,
@@ -31,12 +36,18 @@ from .protocol.models import (
     model_by_name,
 )
 from .protocol.readings import Reading
+from .protocol.session import ScaleSession
+from .wake import Wake, WakeTracker
 
 _LOGGER = logging.getLogger(__name__)
 
 # After a failed sync, ignore pending slots for this long instead of reconnecting
 # at every advertisement (~4 per second) of the same wake.
 RETRY_DELAY = 15.0
+# Seconds after a wake starts when pending deletions run if no sync came first.
+# A weigh-in is final ~14 s after waking; connecting earlier could cut it short,
+# because the scale sleeps ~1 s after HA disconnects (ADR 0008, design §4.3).
+DELETION_DELAY = 25.0
 
 _HANDOVER = "handover"
 
@@ -82,16 +93,27 @@ class ScaleCoordinator:
         self._listeners: list[CALLBACK_TYPE] = []
         self._syncing = False
         self._retry_after = 0.0
+        self.pending_deletions = PendingDeletions(hass, entry.entry_id)
+        self.wakes = WakeTracker(hass, self._async_on_wake)
 
     @callback
     def async_start(self) -> CALLBACK_TYPE:
-        """Watch every advertisement; process readings handed over by a flow."""
+        """Watch every advertisement; process readings handed over by a flow.
+
+        Load `pending_deletions` first.
+        """
         handover = self.hass.data.get(DOMAIN, {}).get(_HANDOVER, {})
         for slot, readings in handover.pop(self.entry.entry_id, {}).items():
             self.async_process_readings(slot, readings)
-        return async_register_advertisement_callback(
+        cancel_advertisements = async_register_advertisement_callback(
             self.hass, self._async_on_advertisement, self.address
         )
+
+        def stop() -> None:
+            cancel_advertisements()
+            self.wakes.async_stop()
+
+        return stop
 
     @callback
     def async_add_listener(self, update: CALLBACK_TYPE) -> CALLBACK_TYPE:
@@ -121,6 +143,7 @@ class ScaleCoordinator:
 
     @callback
     def _async_on_advertisement(self, info: BluetoothServiceInfoBleak) -> None:
+        self.wakes.async_advertisement()
         if self._syncing or self.hass.loop.time() < self._retry_after:
             return
         managed = self._managed_slots()
@@ -143,19 +166,25 @@ class ScaleCoordinator:
         self, subentry: ConfigSubentry, device: BLEDevice | None
     ) -> None:
         slot = int(subentry.data[CONF_SLOT])
+        connected = False
         try:
             async with async_open_session(
                 self.hass, self.address, self.model, device
             ) as session:
+                connected = True
                 result = await session.sync(
                     slot, int(subentry.data[CONF_CONSENT_CODE]), dt_util.now()
                 )
+                # The weigh-in is final once its slot was pending.
+                await self._async_run_pending_deletions(session)
         except ScaleError as err:
             _LOGGER.warning("Syncing slot %s of %s failed: %r", slot, self.address, err)
             self._retry_after = self.hass.loop.time() + RETRY_DELAY
             return
         finally:
             self._syncing = False
+            if connected:
+                self.wakes.async_asleep()
         self.battery_percent = result.battery_percent
         self.last_sync = dt_util.utcnow()
         self._async_update_listeners()
@@ -165,3 +194,70 @@ class ScaleCoordinator:
     def _async_update_listeners(self) -> None:
         for update in list(self._listeners):
             update()
+
+    # --- Pending deletions (design §4.3) ---
+
+    @callback
+    def _async_on_wake(self, wake: Wake) -> None:
+        if self.pending_deletions:
+            wake.async_call_at(DELETION_DELAY, self._async_delete_after_weigh_in)
+
+    @callback
+    def _async_delete_after_weigh_in(self) -> None:
+        # A sync in progress runs the deletions itself.
+        if self._syncing or not self.pending_deletions:
+            return
+        self._syncing = True
+        self.entry.async_create_background_task(
+            self.hass,
+            self._async_delete_session(),
+            f"{DOMAIN} delete scale users {self.address}",
+        )
+
+    async def _async_delete_session(self) -> None:
+        connected = False
+        try:
+            async with async_open_session(
+                self.hass, self.address, self.model
+            ) as session:
+                connected = True
+                await self._async_run_pending_deletions(session)
+        except ScaleError as err:
+            _LOGGER.warning(
+                "Connecting to %s to delete scale users failed: %r", self.address, err
+            )
+        finally:
+            self._syncing = False
+            if connected:
+                self.wakes.async_asleep()
+
+    async def _async_run_pending_deletions(self, session: ScaleSession) -> None:
+        """Consent as each removed scale user and delete it. Never raises
+        ScaleError: a failure keeps the remaining deletions for a later wake."""
+        managed = self._managed_slots()
+        for deletion in self.pending_deletions.all():
+            if deletion.slot in managed:
+                # The slot was adopted again: the scale user is wanted after all.
+                await self.pending_deletions.async_discard(deletion)
+                continue
+            try:
+                await session.consent(deletion.slot, deletion.consent_code)
+                await session.delete_user()
+            except ConsentRejected:
+                _LOGGER.debug(
+                    "Dropping the deletion of slot %s on %s: consent rejected",
+                    deletion.slot,
+                    self.address,
+                )
+                await self.pending_deletions.async_discard(deletion)
+                continue
+            except ScaleError as err:
+                _LOGGER.warning(
+                    "Deleting slot %s on %s failed: %r",
+                    deletion.slot,
+                    self.address,
+                    err,
+                )
+                return
+            _LOGGER.debug("Deleted slot %s on %s", deletion.slot, self.address)
+            await self.pending_deletions.async_discard(deletion)
