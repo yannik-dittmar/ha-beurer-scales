@@ -60,7 +60,7 @@ from .protocol.errors import (
     PairingUnsupported,
     ScaleError,
 )
-from .protocol.frames import UserListEntry, WeightUnit, decode_pending_slots
+from .protocol.frames import WeightUnit, decode_pending_slots
 from .protocol.models import (
     SWAPPED_WEIGHT_SCALE_UUID,
     WEIGHT_SCALE_SERVICE_UUID,
@@ -200,11 +200,13 @@ class ScaleCoordinator:
         # consent of a connection: their next consent must be a connection's
         # first (design §8, V2).
         self._refused_later: set[int] = set()
-        self._ignored: list[int] = []
-        # Slots pending since before this wake, and whether one was appended.
+        # What the last advertisement listed as pending, managed or not.
+        self._managed_pending: list[int] = []
+        self._unmanaged_pending: list[int] = []
+        # Slots pending since before this wake, and whether the scale appended
+        # one (it recognised someone, ADR 0008).
         self._pending_before_wake: set[int] = set()
-        self._recognised = False
-        self._due: list[int] = []
+        self._slot_appended_this_wake = False
         self._device: BLEDevice | None = None
         self._policy = ReadingPolicy(model=self.model)
         self._reading_log = reading_log_store(hass, entry.entry_id)
@@ -309,18 +311,19 @@ class ScaleCoordinator:
             async_delete_unit_issue(self.hass, self.entry)
         return kg
 
-    @callback
-    def async_check_user_list(
-        self, users: Sequence[UserListEntry], rejected_slot: int | None = None
-    ) -> bool:
-        """Raise repairs for the scale users the user list shows are broken.
+    async def _async_check_user_list(
+        self, session: ScaleSession, rejected_slot: int | None = None
+    ) -> None:
+        """Read the user list and raise repairs for the scale users it shows
+        are broken; renew the bond after a factory reset.
 
         A managed slot missing from the list was deleted on the scale; an empty
         list means a factory reset. `rejected_slot` is a slot whose consent just
-        failed: if it is still listed, its consent code is wrong. Returns True
-        when a factory reset is newly detected, so the caller renews the bond
-        (once, see `async_rebond`) while still connected.
+        failed: if it is still listed, its consent code is wrong. The bond is
+        renewed once, when the reset is newly detected, while still connected;
+        a failure to renew it only logs.
         """
+        users = await session.read_user_list()
         newly_reset = False
         for slot, subentry in self._scale_users().items():
             match explain_slot(slot, users):
@@ -343,10 +346,8 @@ class ScaleCoordinator:
             )
             newly_reset |= kind is ScaleUserIssue.FACTORY_RESET
             async_raise_scale_user_issue(self.hass, self.entry, subentry, kind)
-        return newly_reset
-
-    async def async_rebond(self, session: ScaleSession) -> None:
-        """Renew the bond after a factory reset; a failure only logs."""
+        if not newly_reset:
+            return
         try:
             await session.rebond()
         except ScaleError as err:
@@ -374,7 +375,7 @@ class ScaleCoordinator:
         if wake.elapsed < ALREADY_PENDING_WINDOW:
             self._pending_before_wake.update(pending)
         elif any(slot not in self._pending_before_wake for slot in pending):
-            self._recognised = True
+            self._slot_appended_this_wake = True
         if (
             self._syncing
             or self.hass.loop.time() < self._retry_after
@@ -384,16 +385,16 @@ class ScaleCoordinator:
             return
         managed = self._managed_slots()
         ignored = [slot for slot in pending if slot not in managed]
-        if ignored and ignored != self._ignored:
+        if ignored and ignored != self._unmanaged_pending:
             _LOGGER.debug("Ignoring pending slots HA doesn't manage: %s", ignored)
-        self._ignored = ignored
-        self._due = [slot for slot in pending if slot in managed]
+        self._unmanaged_pending = ignored
+        self._managed_pending = [slot for slot in pending if slot in managed]
         self._device = info.device if info.connectable else None
-        if not self._due:
+        if not self._managed_pending:
             return
         # Only leftovers listed: the weigh-in may still be in progress, so they
         # wait for `_async_after_weigh_in`.
-        if any(slot not in self._leftovers for slot in self._due):
+        if any(slot not in self._leftovers for slot in self._managed_pending):
             self._async_start_sync()
 
     @callback
@@ -401,7 +402,7 @@ class ScaleCoordinator:
         """Sync the slots of the last advertisement that are still managed."""
         managed = self._managed_slots()
         order = sync_order(
-            [s for s in self._due if s in managed],
+            [s for s in self._managed_pending if s in managed],
             self._leftovers,
             self._refused_later,
         )
@@ -436,9 +437,7 @@ class ScaleCoordinator:
                 )
             except ConsentRejected:
                 # The user list, which needs no consent, tells why (§9.4b).
-                users = await session.read_user_list()
-                if self.async_check_user_list(users, rejected_slot=slot):
-                    await self.async_rebond(session)
+                await self._async_check_user_list(session, rejected_slot=slot)
                 raise
             async_delete_pairing_issue(self.hass, self.entry)
             async_clear_scale_user_issues(self.hass, first.subentry_id)
@@ -528,7 +527,7 @@ class ScaleCoordinator:
     @callback
     def _async_on_wake(self, wake: Wake) -> None:
         self._pending_before_wake = set()
-        self._recognised = False
+        self._slot_appended_this_wake = False
         # One moment per wake for the leftover sync, the pending deletions and
         # the user-list check, so they share one connection.
         wake.async_call_at(WEIGH_IN_FINAL_DELAY, self._async_after_weigh_in)
@@ -543,10 +542,10 @@ class ScaleCoordinator:
         """
         if self._syncing or async_scale_held(self.hass, self.address):
             return
-        if self._due:
+        if self._managed_pending:
             self._async_start_sync()
             return
-        if not self._recognised and self.entry.options.get(
+        if not self._slot_appended_this_wake and self.entry.options.get(
             CONF_NOTIFY_UNRECOGNISED, DEFAULT_NOTIFY_UNRECOGNISED
         ):
             async_notify_unrecognised(self.hass, self.address, self.entry.title)
@@ -560,10 +559,10 @@ class ScaleCoordinator:
         )
 
     async def _async_check_session(self) -> None:
+        """Check the user list and run the pending deletions in one session."""
+
         async def check(session: ScaleSession) -> None:
-            users = await session.read_user_list()
-            if self.async_check_user_list(users):
-                await self.async_rebond(session)
+            await self._async_check_user_list(session)
             await self._async_run_pending_deletions(session, consented=False)
 
         try:
