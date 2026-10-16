@@ -51,6 +51,7 @@ from .const import (
     PROFILE_HEIGHT_CM,
     SOURCE_REPAIR_CREATE,
     SUBENTRY_SCALE_USER,
+    scale_user_id,
     slot_unique_id,
 )
 from .coordinator import BeurerConfigEntry, async_hand_over_readings
@@ -829,10 +830,11 @@ def async_move_scale_user(
 ) -> None:
     """Move a scale user's device and entities to a new slot, keeping their history.
 
-    Device identifiers and entity unique ids carry the slot (`{address}_slot_{n}`).
+    Device identifiers and entity unique ids carry the slot (`scale_user_id`).
     """
     address: str = entry.data[CONF_ADDRESS]
-    old, new = f"{address}_slot_{subentry.data[CONF_SLOT]}", f"{address}_slot_{slot}"
+    old = scale_user_id(address, subentry.data[CONF_SLOT])
+    new = scale_user_id(address, slot)
     if old == new:
         return
     device_registry = dr.async_get(hass)

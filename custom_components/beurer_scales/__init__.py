@@ -11,6 +11,7 @@ from .const import (
     DOMAIN,
     MANUFACTURER,
     SUBENTRY_SCALE_USER,
+    scale_user_id,
 )
 from .coordinator import (
     BeurerConfigEntry,
@@ -43,7 +44,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: BeurerConfigEntry) -> bo
         device_registry.async_get_or_create(
             config_entry_id=entry.entry_id,
             config_subentry_id=subentry.subentry_id,
-            identifiers={(DOMAIN, f"{address}_slot_{subentry.data[CONF_SLOT]}")},
+            identifiers={(DOMAIN, scale_user_id(address, subentry.data[CONF_SLOT]))},
             manufacturer=MANUFACTURER,
             model="Scale user",
             name=subentry.title,

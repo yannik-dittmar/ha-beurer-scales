@@ -21,7 +21,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_SLOT, DOMAIN, SUBENTRY_SCALE_USER
+from .const import CONF_SLOT, DOMAIN, SUBENTRY_SCALE_USER, scale_user_id
 from .coordinator import BeurerConfigEntry, ScaleCoordinator
 from .protocol.metrics import Metric
 from .protocol.readings import Reading, reading_metrics
@@ -117,10 +117,10 @@ class _ScaleUserSensor(_ScaleSensor):
         self, coordinator: ScaleCoordinator, subentry: ConfigSubentry, key: str
     ) -> None:
         self._slot = int(subentry.data[CONF_SLOT])
-        super().__init__(coordinator, f"slot_{self._slot}_{key}")
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, f"{coordinator.address}_slot_{self._slot}")}
-        )
+        super().__init__(coordinator, key)
+        device_id = scale_user_id(coordinator.address, self._slot)
+        self._attr_unique_id = f"{device_id}_{key}"
+        self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, device_id)})
         self._reading: Reading | None = None
 
     @callback

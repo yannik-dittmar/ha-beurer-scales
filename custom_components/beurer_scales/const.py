@@ -33,3 +33,8 @@ PROFILE_ACTIVITY_LEVEL = "activity_level"  # 1-5
 def slot_unique_id(slot: int) -> str:
     """Return the unique id of the scale user subentry for a slot."""
     return f"slot_{slot}"
+
+
+def scale_user_id(address: str, slot: int | str) -> str:
+    """Return the id of a scale user's device, which prefixes its entities' ids."""
+    return f"{address}_slot_{slot}"

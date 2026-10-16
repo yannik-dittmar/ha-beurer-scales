@@ -13,7 +13,7 @@ from homeassistant.components import persistent_notification
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.util.ulid import ulid_now
 
-from .const import DOMAIN
+from .const import DOMAIN, scale_user_id
 from .protocol.policy import Discard, Discarded
 
 _LOGGER = logging.getLogger(__name__)
@@ -59,7 +59,9 @@ def async_notify_discarded(
         hass,
         f"Home Assistant discarded readings of {name}:\n\n" + "\n".join(lines),
         title=f"Readings of {name} discarded",
-        notification_id=f"{DOMAIN}_{address}_slot_{slot}_discarded_{ulid_now()}",
+        notification_id=(
+            f"{DOMAIN}_{scale_user_id(address, slot)}_discarded_{ulid_now()}"
+        ),
     )
 
 
