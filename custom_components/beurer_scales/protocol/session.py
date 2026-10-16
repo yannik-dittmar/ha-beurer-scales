@@ -21,6 +21,7 @@ from bleak_retry_connector import BleakClientWithServiceCache, establish_connect
 
 from .errors import (
     ConsentRejected,
+    NoFreeSlot,
     PairingFailed,
     PairingUnsupported,
     ScaleConnectionError,
@@ -40,8 +41,20 @@ from .frames import (
 from .models import (
     BATTERY_LEVEL_UUID,
     CURRENT_TIME_UUID,
+    DATABASE_CHANGE_INCREMENT_UUID,
+    DATE_OF_BIRTH_UUID,
+    GENDER_UUID,
+    HEIGHT_UUID,
     USER_CONTROL_POINT_UUID,
     ScaleModel,
+)
+from .profile import (
+    DATABASE_CHANGE_INCREMENT,
+    Profile,
+    encode_activity_level,
+    encode_birth_date,
+    encode_gender,
+    encode_height,
 )
 from .readings import Reading, ReadingAssembler
 
@@ -170,6 +183,11 @@ class ScaleSession:
         self._reading_frame = asyncio.Event()
         self._reading_subscriptions: set[str] = set()
 
+    @property
+    def model(self) -> ScaleModel:
+        """The model of the connected scale."""
+        return self._model
+
     async def set_time(self, now: datetime) -> None:
         """Set the scale's clock. Pass local time: the scale has no time zone."""
         frame = bytes(
@@ -209,6 +227,36 @@ class ScaleSession:
         )
         if response.result is not UcpResult.SUCCESS:
             raise ConsentRejected(f"slot {slot}: {response.result.name}")
+
+    # --- Creating and deleting scale users (§4) ---
+
+    async def register_user(self, consent_code: int) -> int:
+        """Register a new scale user with `consent_code`; return its slot.
+
+        Raises NoFreeSlot when the scale refuses, which a full scale does.
+        """
+        response = await self._ucp(
+            UcpOpcode.REGISTER_NEW_USER, consent_code.to_bytes(2, "little")
+        )
+        if response.result is not UcpResult.SUCCESS or response.slot is None:
+            raise NoFreeSlot(f"registration refused: {response.result.name}")
+        return response.slot
+
+    async def write_profile(self, profile: Profile) -> None:
+        """Write the consented scale user's profile, in the app's order (§4)."""
+        await self._write(DATE_OF_BIRTH_UUID, encode_birth_date(profile))
+        await self._write(DATABASE_CHANGE_INCREMENT_UUID, DATABASE_CHANGE_INCREMENT)
+        await self._write(GENDER_UUID, encode_gender(profile))
+        await self._write(HEIGHT_UUID, encode_height(profile))
+        await self._write(
+            self._model.activity_level_uuid, encode_activity_level(profile)
+        )
+
+    async def delete_user(self) -> None:
+        """Delete the consented scale user on the scale (UCP `03`)."""
+        response = await self._ucp(UcpOpcode.DELETE_USER_DATA, b"")
+        if response.result is not UcpResult.SUCCESS:
+            raise UnexpectedResponse(f"delete refused: {response.result.name}")
 
     # --- Syncing readings (protocol doc §3, §9.4b) ---
 

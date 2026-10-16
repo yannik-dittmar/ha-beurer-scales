@@ -36,6 +36,24 @@
             "adopt": "Adopt existing slot"
           }
         },
+        "create": {
+          "title": "Create new scale user",
+          "description": "Home Assistant creates the scale user on the scale and chooses its consent code itself. The scale uses the profile to compute body composition.",
+          "data": {
+            "person": "Person",
+            "name": "Name",
+            "birth_date": "Birth date",
+            "height_cm": "Height",
+            "gender": "Gender",
+            "activity_level": "Activity level"
+          },
+          "data_description": {
+            "person": "Optional. Links the scale user to a Home Assistant person.",
+            "name": "Leave empty to use the person's name.",
+            "birth_date": "The scale supports ages from 10 to 100 years.",
+            "height_cm": "In centimetres, from 100 to 220."
+          }
+        },
         "adopt": {
           "title": "Adopt existing slot",
           "description": "Use a slot whose consent code you know, for example one Home Assistant created before a reinstall. Don't adopt a scale user that the Beurer app also uses: Home Assistant must be its only client.",
@@ -54,17 +72,19 @@
         }
       },
       "progress": {
-        "wake": "Step on the scale to wake it. Home Assistant then connects, checks the consent code and reads the profile from the scale."
+        "wake": "Step on the scale to wake it. Home Assistant then connects, checks the consent code and reads the profile from the scale.",
+        "create": "Step on the scale to wake it. Home Assistant then connects, creates the scale user on the scale and writes its profile."
       },
       "error": {
         "name_required": "Choose a person or enter a name.",
         "name_in_use": "Another scale user of this scale already has this name.",
         "slot_in_use": "This slot already is a scale user of this scale.",
         "slot_not_found": "The scale has no scale user in this slot.",
-        "invalid_consent_code": "The scale rejected this consent code."
+        "invalid_consent_code": "The scale rejected this consent code.",
+        "invalid_birth_date": "Enter a birth date for an age between 10 and 100 years."
       },
       "abort": {
-        "create_not_available": "Creating a new scale user isn't available yet. Use \"Adopt existing slot\" instead.",
+        "no_free_slot": "Every slot on the scale is taken. Remove a scale user first, then try again.",
         "wake_timeout": "The scale didn't wake up within 3 minutes. Start again and step on the scale.",
         "pairing_unsupported": "The Bluetooth adapter or proxy that reached the scale can't pair with it. Use an ESPHome Bluetooth proxy, or make the host adapter pairable.",
         "cannot_connect": "Home Assistant couldn't talk to the scale. Make sure it is in range, then try again."
@@ -78,6 +98,71 @@
       },
       "last_reading": {
         "name": "Last reading"
+      },
+      "bmi": {
+        "name": "BMI"
+      },
+      "body_fat": {
+        "name": "Body fat"
+      },
+      "body_water": {
+        "name": "Body water"
+      },
+      "muscle": {
+        "name": "Muscle"
+      },
+      "bone_mass": {
+        "name": "Bone mass"
+      },
+      "bmr": {
+        "name": "Basal metabolic rate"
+      },
+      "amr": {
+        "name": "Active metabolic rate"
+      },
+      "visceral_fat": {
+        "name": "Visceral fat"
+      },
+      "metabolic_age": {
+        "name": "Metabolic age"
+      },
+      "lean_body_mass": {
+        "name": "Lean body mass"
+      },
+      "protein_mass": {
+        "name": "Protein mass"
+      },
+      "total_muscle_mass": {
+        "name": "Total muscle mass"
+      },
+      "soft_lean_mass": {
+        "name": "Soft lean mass"
+      },
+      "subcutaneous_fat": {
+        "name": "Subcutaneous fat"
+      },
+      "ideal_weight": {
+        "name": "Ideal weight"
+      },
+      "impedance": {
+        "name": "Impedance"
+      }
+    }
+  },
+  "selector": {
+    "gender": {
+      "options": {
+        "male": "Male",
+        "female": "Female"
+      }
+    },
+    "activity_level": {
+      "options": {
+        "1": "1 - None",
+        "2": "2 - Low",
+        "3": "3 - Medium",
+        "4": "4 - High",
+        "5": "5 - Very high"
       }
     }
   },

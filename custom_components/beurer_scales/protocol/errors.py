@@ -34,3 +34,7 @@ class ConsentRejected(ScaleError):
 
 class UnexpectedResponse(ScaleError):
     """The scale answered with a frame the session can't make sense of."""
+
+
+class NoFreeSlot(ScaleError):
+    """Every slot on the scale holds a scale user; none can be registered."""

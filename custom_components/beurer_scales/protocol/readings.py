@@ -11,7 +11,19 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from .frames import FrameError, WeightFrame, WeightUnit, decode_weight_frame
-from .models import WEIGHT_MEASUREMENT_UUID
+from .metrics import (
+    Metric,
+    decode_body_composition_frame,
+    decode_custom1_frame,
+    decode_custom2_frame,
+)
+from .models import (
+    BODY_COMPOSITION_UUID,
+    CUSTOM1_UUID,
+    CUSTOM2_UUID,
+    WEIGHT_MEASUREMENT_UUID,
+    ScaleModel,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -29,6 +41,8 @@ class Reading:
     frames: Mapping[str, bytes] = field(default_factory=dict)
     # The unit the scale reported `weight_kg` in; only kg may be used as kg.
     unit: WeightUnit = WeightUnit.KG
+    # From the weight frame; None when the scale didn't compute it.
+    bmi: float | None = None
 
 
 @dataclass(slots=True)
@@ -69,6 +83,64 @@ class ReadingAssembler:
                 weight_kg=group.weight.weight_kg,
                 frames=dict(group.frames),
                 unit=group.weight.unit,
+                bmi=group.weight.bmi or None,
             )
             for group in self._groups
         ]
+
+
+def reading_metrics(reading: Reading, model: ScaleModel) -> dict[Metric, float]:
+    """The body-composition metrics of a reading that its model measures.
+
+    A metric is left out when the scale didn't measure it or its frame is
+    missing or malformed.
+    """
+    values: dict[Metric, float | None] = {Metric.BMI: reading.bmi}
+    water_mass_kg: float | None = None
+    try:
+        if (frame := reading.frames.get(BODY_COMPOSITION_UUID)) is not None:
+            body = decode_body_composition_frame(
+                frame, mass_resolution_kg=model.body_mass_resolution_kg
+            )
+            water_mass_kg = body.body_water_mass_kg
+            values |= {
+                Metric.BODY_FAT: body.body_fat_percent,
+                Metric.BMR: body.bmr_kcal,
+                Metric.MUSCLE: body.muscle_percent,
+                Metric.SOFT_LEAN_MASS: body.soft_lean_mass_kg,
+                Metric.IMPEDANCE: body.impedance_ohm,
+            }
+    except FrameError as err:
+        _LOGGER.warning("Ignoring a body composition frame: %s", err)
+    try:
+        if (frame := reading.frames.get(CUSTOM1_UUID)) is not None:
+            custom1 = decode_custom1_frame(frame)
+            values |= {
+                Metric.IDEAL_WEIGHT: custom1.ideal_weight_kg,
+                Metric.AMR: custom1.amr_kcal,
+            }
+    except FrameError as err:
+        _LOGGER.warning("Ignoring a custom1 frame: %s", err)
+    try:
+        if (frame := reading.frames.get(CUSTOM2_UUID)) is not None:
+            custom2 = decode_custom2_frame(frame)
+            values |= {
+                Metric.VISCERAL_FAT: custom2.visceral_fat,
+                Metric.METABOLIC_AGE: custom2.metabolic_age_years,
+                Metric.LEAN_BODY_MASS: custom2.lean_body_mass_kg,
+                Metric.PROTEIN_MASS: custom2.protein_mass_kg,
+                Metric.TOTAL_MUSCLE_MASS: custom2.total_muscle_mass_kg,
+                Metric.SUBCUTANEOUS_FAT: custom2.subcutaneous_fat_percent,
+                Metric.BONE_MASS: custom2.bone_mass_kg,
+                Metric.BODY_WATER: custom2.body_water_percent,
+            }
+    except FrameError as err:
+        _LOGGER.warning("Ignoring a custom2 frame: %s", err)
+    if values.get(Metric.BODY_WATER) is None and water_mass_kg and reading.weight_kg:
+        # The app's fallback when custom2 has no water % (§5.3).
+        values[Metric.BODY_WATER] = round(water_mass_kg / reading.weight_kg * 100, 1)
+    return {
+        metric: value
+        for metric in model.metrics
+        if (value := values.get(metric)) is not None
+    }
