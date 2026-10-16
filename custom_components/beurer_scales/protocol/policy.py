@@ -13,16 +13,15 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
 
-from .models import uuid16
+from .frames import FrameError
+from .metrics import decode_custom1_frame
+from .models import CUSTOM1_UUID
 from .readings import Reading
 
 # Readings older than this, measured back from the sync start, are backlog.
 BACKLOG_AGE = timedelta(minutes=5)
 # How many readings the de-duplication log remembers.
 LOG_SIZE = 100
-
-# The BF450's custom1 frame (protocol doc §5.3).
-_CUSTOM1_UUID = uuid16(0xFFF5)
 
 # One log entry: slot, ISO timestamp, weight in kg.
 type LogEntry = tuple[int, str, float]
@@ -51,14 +50,18 @@ class PolicyResult:
     discarded: list[Discarded] = field(default_factory=list)
 
 
-def guessed_slot(reading: Reading) -> int:
-    """Custom1 byte 4: 0 when the scale was sure, else the slot it guessed (§9.4).
+def guessed(reading: Reading) -> bool:
+    """Whether the scale only guessed the slot (custom1 byte 4 != 0, §9.4).
 
-    A minimal accessor for the one byte the policy needs; a full custom1 decoder
-    can take its place. A reading without custom1 counts as not guessed.
+    A reading without a custom1 frame, or with a malformed one, counts as not
+    guessed: such models and frames carry no guess flag.
     """
-    custom1 = reading.frames.get(_CUSTOM1_UUID)
-    return custom1[4] if custom1 is not None and len(custom1) >= 5 else 0
+    if (frame := reading.frames.get(CUSTOM1_UUID)) is None:
+        return False
+    try:
+        return decode_custom1_frame(frame).guessed
+    except FrameError:
+        return False
 
 
 def classify(reading: Reading, sync_start: datetime) -> Discard | None:
@@ -69,7 +72,7 @@ def classify(reading: Reading, sync_start: datetime) -> Discard | None:
     """
     if reading.timestamp is not None and reading.timestamp < sync_start - BACKLOG_AGE:
         return Discard.BACKLOG
-    if guessed_slot(reading):
+    if guessed(reading):
         return Discard.GUESSED
     return None
 
