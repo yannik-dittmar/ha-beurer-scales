@@ -13,6 +13,13 @@ class PairingUnsupported(ScaleConnectionError):
     """The Bluetooth path (adapter or proxy) can't bond, and the scale requires it."""
 
 
+class PairingFailed(ScaleConnectionError):
+    """The Bluetooth path tried to bond with the scale and failed.
+
+    For example a local BlueZ adapter without a pairing agent (ADR 0002).
+    """
+
+
 class ScaleTimeout(ScaleError):
     """The scale didn't answer in time, or the session ran out of its time budget."""
 
@@ -31,3 +38,7 @@ class UnexpectedResponse(ScaleError):
 
 class NoFreeSlot(ScaleError):
     """Every slot on the scale holds a scale user; none can be registered."""
+
+
+class TeachingTimeout(ScaleTimeout):
+    """Nobody stepped on the scale while teaching waited for the first reading."""

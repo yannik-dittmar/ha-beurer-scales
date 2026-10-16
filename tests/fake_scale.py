@@ -9,7 +9,8 @@ The fake keeps its own GATT map and frame encoders, taken from the captures in
 §9, so it is an independent source of truth for the code under test.
 
 Implemented so far: waking and sleeping, the required bond, setting the time,
-the user list, consent, stored and live readings, the pending-slot list in the
+the user list, consent (a second one in the same connection allowed, rejected
+or dropped), stored and live readings, the pending-slot list in the
 advertisement, the battery level, registering and deleting scale users, profile
 writes, and injected write failures. Extend it as later behaviour needs it
 (factory reset).
@@ -23,7 +24,7 @@ from typing import Any, Literal
 
 from bleak.backends.device import BLEDevice
 from bleak.exc import BleakError
-from bleak_retry_connector import BleakNotFoundError
+from bleak_retry_connector import BleakConnectionError, BleakNotFoundError
 
 
 def _uuid(short: int) -> str:
@@ -51,7 +52,20 @@ TAKE_MEASUREMENT = _uuid(0xFFF4)
 SWAPPED_WEIGHT_SCALE_UUID = _uuid(0x1D18)
 SLOT_COUNT = 8
 
-Pairing = Literal["supported", "unsupported"]
+# "fails": the path tries to bond and fails, e.g. a BlueZ adapter without an agent.
+Pairing = Literal["supported", "unsupported", "fails"]
+PairingFailure = Literal["bluez", "kernel"]
+DisplayUnit = Literal["kg", "lb", "st"]
+# How the scale answers a consent for another slot in a connection that already
+# consented one. Unverified on a BF450 (design §8, V2), so the fake can do each.
+SecondConsent = Literal["allowed", "rejected", "dropped"]
+
+# How bonding failures reach the caller, as bleak-retry-connector wraps them.
+_PAIRING_FAILURES: dict[PairingFailure, str] = {
+    "bluez": "[org.bluez.Error.AuthenticationFailed] Authentication Failed",
+    # habluetooth's management-socket client (client_mgmt.py).
+    "kernel": "pairing failed (auth status 0x05)",
+}
 # "error": the write fails; "stall": the write never completes.
 WriteFailure = Literal["error", "stall"]
 NotifyCallback = Callable[[Any, bytearray], None]
@@ -104,8 +118,11 @@ class FakeScale:
     users: dict[int, FakeScaleUser] = field(default_factory=dict)
     # Whether the Bluetooth path HA connects through can bond at all.
     pairing: Pairing = "supported"
+    # The error a failing bond produces, when `pairing` is "fails".
+    pairing_failure: PairingFailure = "bluez"
     # A scale that stops answering on the User Control Point.
     answers_ucp: bool = True
+    second_consent: SecondConsent = "allowed"
 
     awake: bool = False
     # The last time HA set, as the scale decoded it.
@@ -114,6 +131,9 @@ class FakeScale:
     # Every User Control Point request written to the scale.
     ucp_requests: list[bytes] = field(default_factory=list)
     battery_level: int = 71
+    # The display unit, a scale setting HA never writes. Assumed (design V5): in
+    # lb/st the scale sends 2A9D in imperial units, flags bit 0 set, 0.01 lb.
+    display_unit: DisplayUnit = "kg"
     client: "FakeBleakClient | None" = None
     # Writes to these characteristics misbehave.
     write_failures: dict[str, WriteFailure] = field(default_factory=dict)
@@ -157,7 +177,13 @@ class FakeScale:
         pending.
         """
         reading = reading.for_slot(slot)
-        if self.client is not None and self.client.consented_slot == slot:
+        if self.display_unit != "kg":
+            reading = reading.in_pounds()
+        if (
+            self.client is not None
+            and self.connected
+            and self.client.consented_slot == slot
+        ):
             self.client.send_reading(reading)
             self.client.notify(TAKE_MEASUREMENT, b"\x01")
         else:
@@ -179,6 +205,11 @@ class FakeScale:
         if pair and self.pairing == "unsupported":
             # An ESPHome proxy without pairing support (bleak-esphome).
             raise NotImplementedError("Pairing is not available in this version")
+        if pair and self.pairing == "fails":
+            raise BleakConnectionError(
+                f"{name} - {device.address}: Failed to connect after 2 attempt(s): "
+                f"{_PAIRING_FAILURES[self.pairing_failure]}"
+            )
         self.client = FakeBleakClient(self, bonded=pair)
         return self.client
 
@@ -281,7 +312,14 @@ class FakeBleakClient:
             slot = request[1]
             code = int.from_bytes(request[2:4], "little")
             user = self._scale.users.get(slot)
-            if user is not None and user.consent_code == code:
+            second = self.consented_slot not in (None, slot)
+            if second and self._scale.second_consent == "dropped":
+                self._connected = False
+                self._scale.awake = False
+                raise BleakError("Disconnected during consent")
+            if second and self._scale.second_consent == "rejected":
+                self._notify(USER_CONTROL_POINT, b"\x20\x02\x04")
+            elif user is not None and user.consent_code == code:
                 self.consented_slot = slot
                 self._notify(USER_CONTROL_POINT, b"\x20\x02\x01")
                 # Stored readings follow the consent, oldest first (§9.4b),
@@ -366,6 +404,20 @@ class FakeReading:
     def for_slot(self, slot: int) -> "FakeReading":
         """The same reading, assigned to `slot`."""
         return self._with_weight(slot=slot)
+
+    def in_pounds(self) -> "FakeReading":
+        """The same reading with 2A9D in imperial units (0x2A9D spec)."""
+        frames = []
+        for short_uuid, frame in self.frames:
+            if short_uuid == 0x2A9D:
+                kg = int.from_bytes(frame[1:3], "little") * 0.005
+                raw_lb = round(kg / 0.45359237 / 0.01)
+                frame = (
+                    bytes([frame[0] | 0x01, *raw_lb.to_bytes(2, "little")])
+                    + (frame[3:])
+                )
+            frames.append((short_uuid, frame))
+        return FakeReading(tuple(frames))
 
     def _with_weight(
         self, *, timestamp: datetime | None = None, slot: int | None = None

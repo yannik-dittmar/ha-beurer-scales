@@ -8,6 +8,7 @@ import pytest
 
 from custom_components.beurer_scales.protocol.errors import (
     ConsentRejected,
+    PairingFailed,
     PairingUnsupported,
     ScaleConnectionError,
     ScaleTimeout,
@@ -167,3 +168,27 @@ async def test_a_path_without_pairing_support_is_reported(scale: FakeScale) -> N
     with pytest.raises(PairingUnsupported):
         async with open_session(scale.ble_device, BF450):
             pass
+
+
+@pytest.mark.parametrize(
+    "path", ["bluez", "kernel"], ids=["bluez agentless", "habluetooth mgmt"]
+)
+async def test_a_failed_bond_is_reported(scale: FakeScale, path: str) -> None:
+    """A Bluetooth path that tries to bond and fails raises PairingFailed."""
+    scale.pairing = "fails"
+    scale.pairing_failure = path
+
+    with pytest.raises(PairingFailed):
+        async with open_session(scale.ble_device, BF450):
+            pass
+
+
+async def test_a_connection_failure_is_not_a_pairing_failure(scale: FakeScale) -> None:
+    """A sleeping scale is a connection error, not a pairing problem."""
+    scale.awake = False
+
+    with pytest.raises(ScaleConnectionError) as caught:
+        async with open_session(scale.ble_device, BF450):
+            pass
+
+    assert not isinstance(caught.value, PairingFailed | PairingUnsupported)

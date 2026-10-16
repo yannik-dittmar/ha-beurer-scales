@@ -137,6 +137,19 @@ def decode_pending_slots(payload: bytes) -> tuple[int, ...]:
     return tuple(payload)
 
 
+class WeightUnit(StrEnum):
+    """The unit a weight frame reports its weight in."""
+
+    KG = "kg"
+    LB = "lb"
+
+
+# 0x2A9D flags bit 0: 0 = SI (kg), 1 = imperial (lb). The BF450 sends 0x02 in kg
+# mode; whether it sets this bit in lb/st mode is unverified (design V5). This is
+# the one place to change if the scale signals the unit differently.
+_WEIGHT_FLAG_IMPERIAL = 0x01
+
+
 @dataclass(frozen=True, slots=True)
 class WeightFrame:
     """A Weight Measurement (0x2A9D) frame. It always starts a new reading."""
@@ -147,13 +160,15 @@ class WeightFrame:
     slot: int
     bmi: float
     height_cm: int
+    # `weight_kg` is in this unit; anything but kg must not be used as kg.
+    unit: WeightUnit = WeightUnit.KG
 
 
 _WEIGHT_FRAME_LENGTH = 15
 
 
 def decode_weight_frame(frame: bytes) -> WeightFrame:
-    """Decode 0x2A9D. The flags byte is ignored, as the app does (§5.1, §9.4)."""
+    """Decode 0x2A9D. Only the unit flag is read; the app ignores flags (§5.1, §9.4)."""
     if len(frame) != _WEIGHT_FRAME_LENGTH:
         raise FrameError(f"weight frame of {len(frame)} bytes: {frame.hex()}")
     try:
@@ -169,4 +184,5 @@ def decode_weight_frame(frame: bytes) -> WeightFrame:
         bmi=round(int.from_bytes(frame[11:13], "little") * 0.1, 1),
         # Raw cm on the BF450 (§9.3).
         height_cm=int.from_bytes(frame[13:15], "little"),
+        unit=WeightUnit.LB if frame[0] & _WEIGHT_FLAG_IMPERIAL else WeightUnit.KG,
     )

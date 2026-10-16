@@ -58,6 +58,14 @@
             "height_cm": "In centimetres, from 100 to 220."
           }
         },
+        "teach_more": {
+          "title": "Teach the scale",
+          "description": "Reading {reading} of {readings} taken. Each reading teaches the scale the new scale user's weight, so it recognises them afterwards. Step off and on again for another reading, or finish now.",
+          "menu_options": {
+            "teach": "Take another reading",
+            "teach_done": "Finish"
+          }
+        },
         "adopt": {
           "title": "Adopt existing slot",
           "description": "Use a slot whose consent code you know, for example one Home Assistant created before a reinstall. Don't adopt a scale user that the Beurer app also uses: Home Assistant must be its only client.",
@@ -73,11 +81,34 @@
             "slot": "The slot number on the scale.",
             "consent_code": "The 4-digit code chosen when this scale user was created."
           }
+        },
+        "reconfigure": {
+          "title": "Change scale user",
+          "description": "Renaming the scale user or changing its person doesn't need the scale. Changing the profile does: Home Assistant then asks you to wake the scale and writes the new profile to it.",
+          "data": {
+            "person": "Person",
+            "name": "Name",
+            "birth_date": "Birth date",
+            "height_cm": "Height",
+            "gender": "Gender",
+            "activity_level": "Activity level"
+          },
+          "data_description": {
+            "person": "Optional. Links the scale user to a Home Assistant person.",
+            "name": "Leave empty to use the person's name.",
+            "birth_date": "The scale supports ages from 10 to 100 years.",
+            "height_cm": "In centimetres, from 100 to 220."
+          }
         }
       },
       "progress": {
         "wake": "Step on the scale to wake it. Home Assistant then connects, checks the consent code and reads the profile from the scale.",
-        "create": "Step on the scale to wake it. Home Assistant then connects, creates the scale user on the scale and writes its profile."
+        "create": "Step on the scale to wake it. Home Assistant then connects, creates the scale user on the scale and writes its profile.",
+        "teach": "Now the new scale user steps off the scale and on again: reading {reading} of {readings}. Stand still until the scale shows the result.",
+        "reconfigure": "Step on the scale to wake it. Home Assistant then connects and writes the new profile to the scale."
+      },
+      "create_entry": {
+        "teaching_timeout": "Teaching ended because the scale got no further reading in time. The scale user was created with the readings taken so far."
       },
       "error": {
         "name_required": "Choose a person or enter a name.",
@@ -91,7 +122,10 @@
         "no_free_slot": "Every slot on the scale is taken. Remove a scale user first, then try again.",
         "wake_timeout": "The scale didn't wake up within 3 minutes. Start again and step on the scale.",
         "pairing_unsupported": "The Bluetooth adapter or proxy that reached the scale can't pair with it. Use an ESPHome Bluetooth proxy, or make the host adapter pairable.",
-        "cannot_connect": "Home Assistant couldn't talk to the scale. Make sure it is in range, then try again."
+        "cannot_connect": "Home Assistant couldn't talk to the scale. Make sure it is in range, then try again.",
+        "teaching_timeout": "Nobody stepped on the scale for the first teaching reading. The new scale user was removed from the scale again; start again to create it.",
+        "consent_rejected": "The scale rejected this scale user's consent code, so the profile couldn't be written. Nothing was changed.",
+        "reconfigure_successful": "The scale user was updated."
       }
     }
   },
@@ -213,6 +247,16 @@
         "4": "4 - High",
         "5": "5 - Very high"
       }
+    }
+  },
+  "issues": {
+    "pairing_impossible": {
+      "title": "{name} can't pair through this Bluetooth path",
+      "description": "Home Assistant reached the scale {name}, but the Bluetooth adapter or proxy it used couldn't pair (bond) with it. The scale only stays connected when it is paired, so readings aren't synced.\n\nTo fix it, do one of these:\n- Add an ESPHome Bluetooth proxy on an ESP32 near the scale. ESPHome proxies pair with the scale automatically.\n- If Home Assistant uses its own Bluetooth adapter, make the host adapter pairable. A local adapter on Home Assistant OS usually can't pair.\n\nThis issue goes away after the next successful sync."
+    },
+    "unsupported_unit": {
+      "title": "{name} reports weights in {unit}",
+      "description": "The scale {name} sent readings in {unit} instead of kg. Home Assistant only supports kg and didn't record these readings, so your sensors don't show wrong values.\n\nSet the scale's display unit back to kg, for example in the Beurer app. Home Assistant never changes the scale's settings. This warning goes away with the next reading in kg."
     }
   }
 }

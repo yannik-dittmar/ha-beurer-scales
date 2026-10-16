@@ -22,6 +22,7 @@ from bleak_retry_connector import BleakClientWithServiceCache, establish_connect
 from .errors import (
     ConsentRejected,
     NoFreeSlot,
+    PairingFailed,
     PairingUnsupported,
     ScaleConnectionError,
     ScaleTimeout,
@@ -67,6 +68,15 @@ CONNECT_ATTEMPTS = 2
 # reading arrive ~0.4 s apart, the first ~0.4 s after consent (§9.2, §9.4b).
 QUIET_PERIOD = 2.5
 _DISCONNECT_TIMEOUT = 5.0
+# Bleak has no typed pairing error; these appear in the messages of failed bonds:
+# BlueZ's Pair (org.bluez.Error.Authentication*) and habluetooth's kernel client.
+# Unverified on real hardware: extend this when a failure shows up unrecognised.
+# Matched case-insensitively, so keep them lower case.
+PAIRING_FAILURE_MARKERS = (
+    "org.bluez.error.authentication",
+    "pairing failed",
+    "pairing requires",
+)
 
 
 class GattClient(Protocol):
@@ -145,7 +155,10 @@ async def _connect(device: BLEDevice) -> GattClient:
         # bleak-esphome raises this for a proxy without pairing support.
         raise PairingUnsupported(str(err)) from err
     except BleakError as err:
-        raise ScaleConnectionError(str(err)) from err
+        message = str(err)
+        if any(marker in message.lower() for marker in PAIRING_FAILURE_MARKERS):
+            raise PairingFailed(message) from err
+        raise ScaleConnectionError(message) from err
     return client
 
 
@@ -168,6 +181,8 @@ class ScaleSession:
         self._readings_returned = 0
         self._reading_frame = asyncio.Event()
         self._reading_subscriptions: set[str] = set()
+        # The reading each FFF4 `01` completed, until teaching takes it.
+        self._live_readings: asyncio.Queue[Reading] = asyncio.Queue()
 
     @property
     def model(self) -> ScaleModel:
@@ -267,6 +282,17 @@ class ScaleSession:
         readings = await self.collect_readings(quiet_period=quiet_period)
         return SyncResult(readings=readings, battery_percent=await self.read_battery())
 
+    async def drain(
+        self, slot: int, consent_code: int, *, quiet_period: float | None = None
+    ) -> list[Reading]:
+        """Consent another scale user after `sync` and collect its readings.
+
+        Whether the scale allows a second consent in one connection is unverified
+        (design §8, V2); a refusal raises ConsentRejected or ScaleConnectionError.
+        """
+        await self.consent(slot, consent_code)
+        return await self.collect_readings(quiet_period=quiet_period)
+
     async def subscribe_readings(self) -> None:
         """Subscribe to the measurement characteristics. Do this before consent:
         the scale pushes the stored readings right after it (§3)."""
@@ -281,6 +307,8 @@ class ScaleSession:
                 # FFF4 `01` only says a live reading has finished.
                 if uuid != self._model.live_reading_done_uuid:
                     self._readings.add(uuid, bytes(data))
+                elif readings := self._readings.readings():
+                    self._live_readings.put_nowait(readings[-1])
                 self._reading_frame.set()
 
             try:
@@ -308,6 +336,23 @@ class ScaleSession:
             len(readings),
         )
         return new
+
+    async def wait_for_live_reading(
+        self, *, quiet_period: float | None = None
+    ) -> Reading:
+        """Wait for the next live reading of the consented scale user (teaching).
+
+        Call `subscribe_readings` first. A reading counts once the scale says it is
+        complete (FFF4 `01`); readings that finished before this call are returned
+        one by one, oldest first. Models without that signal count a reading once
+        the scale is quiet. Has no timeout of its own.
+        """
+        if self._model.live_reading_done_uuid:
+            return await self._live_readings.get()
+        while True:
+            await self._reading_frame.wait()
+            if new := await self.collect_readings(quiet_period=quiet_period):
+                return new[-1]
 
     async def read_battery(self) -> int | None:
         """Read the battery level in percent; None if the scale doesn't say."""
