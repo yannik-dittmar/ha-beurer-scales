@@ -95,6 +95,10 @@ WEIGH_IN_FINAL_DELAY = 25.0
 # Slots listed this early in a wake were pending before it; a slot listed later
 # is the wake's weigh-in, final ~14 s after stepping on (protocol doc §2).
 ALREADY_PENDING_WINDOW = 5.0
+# HA's sessions end this long before the scale would fall asleep by itself, so
+# work started late in a wake (at `WEIGH_IN_FINAL_DELAY`) still disconnects
+# cleanly.
+WAKE_END_MARGIN = 2.0
 
 _HANDOVER = "handover"
 
@@ -460,17 +464,20 @@ class ScaleCoordinator:
     ) -> None:
         """Hold the scale and run `work` in a session; the scale sleeps after it.
 
-        Leaves the scale alone if a flow holds it: the work waits for a later
-        wake. Raises ScaleError.
+        The session ends before the wake does, however late in it the work
+        starts. Leaves the scale alone if a flow holds it: the work waits for a
+        later wake. Raises ScaleError.
         """
         connected = False
+        wake = self.wakes.current
+        deadline = wake.falls_asleep_at - WAKE_END_MARGIN if wake else None
         try:
             if async_scale_held(self.hass, self.address):
                 return
             async with (
                 async_hold_scale(self.hass, self.address),
                 async_open_session(
-                    self.hass, self.address, self.model, device
+                    self.hass, self.address, self.model, device, deadline=deadline
                 ) as session,
             ):
                 connected = True

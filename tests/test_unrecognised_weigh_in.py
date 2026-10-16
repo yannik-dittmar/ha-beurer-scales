@@ -5,6 +5,7 @@ the user list and disconnect: a factory reset or a deletion on the scale would
 otherwise go unnoticed, because the scale never lists those slots again.
 """
 
+from datetime import timedelta
 from types import MappingProxyType
 
 import pytest
@@ -15,11 +16,12 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import issue_registry as ir
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
+    async_fire_time_changed,
     async_get_persistent_notifications,
 )
 
 from . import frames
-from .fake_scale import FakeReading, FakeScale
+from .fake_scale import USER_LIST, FakeReading, FakeScale
 from .test_remove_scale_user import BOB, remove_bob
 from .test_scale_user_repairs import anna_id, scale_issues, setup_anna
 from .test_sync import WEIGHT, anna_scale, local_now, state
@@ -225,3 +227,36 @@ async def test_a_recognised_weigh_in_needs_no_extra_connection(
     assert state(hass, WEIGHT).state == "78.4"
     assert fake_scale.connection_attempts == 1
     assert unrecognised_notifications(hass) == []
+
+
+async def tick(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory, seconds: int
+) -> None:
+    """Let time pass without waiting for background tasks."""
+    for _ in range(seconds // 2):
+        freezer.tick(timedelta(seconds=2))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+
+
+async def test_the_check_ends_with_the_wake_window(
+    hass: HomeAssistant, fake_scale: FakeScale, freezer: FrozenDateTimeFactory
+) -> None:
+    """Started at ~25 s, the check gets what is left of the ~47 s wake, not 40 s."""
+    await setup_anna(hass)
+    fake_scale.add_user(slot=2, consent_code=4321)
+    fake_scale.write_failures[USER_LIST] = "stall"
+    await wake_scale(hass, fake_scale)
+    await stay_awake(hass, freezer, fake_scale, 24)
+
+    # Not waiting for background tasks: the check is stuck on the scale.
+    await tick(hass, freezer, 6)
+    assert fake_scale.stalled
+
+    await tick(hass, freezer, 18)
+    stalled_at_48_s = fake_scale.stalled
+    await tick(hass, freezer, 30)
+
+    # Gave up before the scale fell asleep, ~47 s after waking.
+    assert not stalled_at_48_s
+    assert not fake_scale.connected

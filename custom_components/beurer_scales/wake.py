@@ -16,6 +16,8 @@ from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 # Without an advertisement for this long the scale is asleep again. A BF450
 # advertises several times a second while awake.
 WAKE_GAP = 10.0
+# Unless a connection keeps it awake, the scale sleeps this long after waking.
+WAKE_WINDOW = 47.0
 
 
 class Wake:
@@ -27,6 +29,11 @@ class Wake:
         self.started = hass.loop.time()
         self.ended = False
         self._timers: set[asyncio.TimerHandle] = set()
+
+    @property
+    def falls_asleep_at(self) -> float:
+        """When the scale goes to sleep by itself, in event loop time."""
+        return self.started + WAKE_WINDOW
 
     @property
     def elapsed(self) -> float:

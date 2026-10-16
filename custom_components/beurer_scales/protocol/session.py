@@ -130,15 +130,23 @@ async def open_session(
     model: ScaleModel,
     *,
     session_timeout: float | None = None,
+    deadline: float | None = None,
     response_timeout: float | None = None,
 ) -> AsyncIterator["ScaleSession"]:
-    """Connect with bonding and yield a session; always disconnect afterwards."""
+    """Connect with bonding and yield a session; always disconnect afterwards.
+
+    The session ends after `session_timeout`, or at `deadline` (event loop
+    time) if that comes first, e.g. when it starts late in a wake.
+    """
     if session_timeout is None:
         session_timeout = SESSION_TIMEOUT
     if response_timeout is None:
         response_timeout = RESPONSE_TIMEOUT
+    ends_at = asyncio.get_running_loop().time() + session_timeout
+    if deadline is not None:
+        ends_at = min(ends_at, deadline)
     try:
-        async with asyncio.timeout(session_timeout):
+        async with asyncio.timeout_at(ends_at):
             client = await _connect(device)
             session = ScaleSession(client, model, response_timeout=response_timeout)
             try:
