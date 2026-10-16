@@ -15,7 +15,7 @@ from enum import StrEnum
 
 from .frames import FrameError
 from .metrics import decode_custom1_frame
-from .models import CUSTOM1_UUID
+from .models import CUSTOM1_UUID, FrameKind, ScaleModel
 from .readings import Reading
 
 # Readings older than this, measured back from the sync start, are backlog.
@@ -50,12 +50,15 @@ class PolicyResult:
     discarded: list[Discarded] = field(default_factory=list)
 
 
-def guessed(reading: Reading) -> bool:
+def guessed(reading: Reading, model: ScaleModel) -> bool:
     """Whether the scale only guessed the slot (custom1 byte 4 != 0, §9.4).
 
-    A reading without a custom1 frame, or with a malformed one, counts as not
-    guessed: such models and frames carry no guess flag.
+    Only models whose FFF5 frame is custom1 flag a guess; FFF5 is a heart-rate
+    frame on others (§5.4). A reading without a custom1 frame, or with a
+    malformed one, counts as not guessed.
     """
+    if (CUSTOM1_UUID, FrameKind.CUSTOM1) not in model.reading_frames:
+        return False
     if (frame := reading.frames.get(CUSTOM1_UUID)) is None:
         return False
     try:
@@ -64,7 +67,9 @@ def guessed(reading: Reading) -> bool:
         return False
 
 
-def classify(reading: Reading, sync_start: datetime) -> Discard | None:
+def classify(
+    reading: Reading, sync_start: datetime, model: ScaleModel
+) -> Discard | None:
     """Why to discard a reading, or None if it is fresh.
 
     `sync_start` is on the scale's clock: local time without a time zone. A
@@ -72,7 +77,7 @@ def classify(reading: Reading, sync_start: datetime) -> Discard | None:
     """
     if reading.timestamp is not None and reading.timestamp < sync_start - BACKLOG_AGE:
         return Discard.BACKLOG
-    if guessed(reading):
+    if guessed(reading, model):
         return Discard.GUESSED
     return None
 
@@ -80,8 +85,16 @@ def classify(reading: Reading, sync_start: datetime) -> Discard | None:
 class ReadingPolicy:
     """Sorts each sync's readings and remembers the recent ones."""
 
-    def __init__(self, log: Iterable[LogEntry] = (), *, max_log: int = LOG_SIZE):
-        """Start from a log restored from storage, or an empty one."""
+    def __init__(
+        self,
+        log: Iterable[LogEntry] = (),
+        *,
+        model: ScaleModel,
+        max_log: int = LOG_SIZE,
+    ):
+        """Start from a log restored from storage, or an empty one, for a
+        scale of `model`."""
+        self._model = model
         self._log: deque[LogEntry] = deque(
             (_entry(*entry) for entry in log), maxlen=max_log
         )
@@ -99,7 +112,7 @@ class ReadingPolicy:
                 if key in self._log:
                     continue
                 self._log.append(key)
-            if (reason := classify(reading, sync_start)) is None:
+            if (reason := classify(reading, sync_start, self._model)) is None:
                 result.fresh.append(reading)
             else:
                 result.discarded.append(Discarded(reading, reason))

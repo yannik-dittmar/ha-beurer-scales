@@ -206,7 +206,7 @@ class ScaleCoordinator:
         self._recognised = False
         self._due: list[int] = []
         self._device: BLEDevice | None = None
-        self._policy = ReadingPolicy()
+        self._policy = ReadingPolicy(model=self.model)
         self._reading_log = reading_log_store(hass, entry.entry_id)
         self.pending_deletions = PendingDeletions(hass, entry.entry_id)
         self.wakes = WakeTracker(hass, self._async_on_wake)
@@ -215,7 +215,9 @@ class ScaleCoordinator:
         """Restore the de-duplication log and the pending deletions; call
         before `async_start`."""
         if (stored := await self._reading_log.async_load()) is not None:
-            self._policy = ReadingPolicy(tuple(e) for e in stored["readings"])
+            self._policy = ReadingPolicy(
+                (tuple(e) for e in stored["readings"]), model=self.model
+            )
         await self.pending_deletions.async_load()
 
     async def async_save(self) -> None:
