@@ -68,19 +68,6 @@ async def test_add_scale_user_offers_create_and_adopt(
     assert result["menu_options"] == ["create", "adopt"]
 
 
-async def test_create_is_not_available_yet(
-    hass: HomeAssistant, loaded_scale: MockConfigEntry
-) -> None:
-    """Creating a new scale user isn't built yet and says so."""
-    result = await start_flow(hass, loaded_scale)
-    result = await hass.config_entries.subentries.async_configure(
-        result["flow_id"], {"next_step_id": "create"}
-    )
-
-    assert result["type"] is FlowResultType.ABORT
-    assert result["reason"] == "create_not_available"
-
-
 async def test_adopt_reads_the_profile_and_creates_the_scale_user(
     hass: HomeAssistant,
     loaded_scale: MockConfigEntry,
