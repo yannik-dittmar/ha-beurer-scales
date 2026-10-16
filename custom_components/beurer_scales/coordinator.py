@@ -7,7 +7,7 @@ whether from a sync or handed over by a flow that consented, goes through
 """
 
 import logging
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
@@ -23,14 +23,22 @@ from homeassistant.util import dt as dt_util
 
 from .connection import async_open_session
 from .const import CONF_CONSENT_CODE, CONF_MODEL, CONF_SLOT, DOMAIN, SUBENTRY_SCALE_USER
-from .protocol.errors import ScaleError
-from .protocol.frames import decode_pending_slots
+from .protocol.errors import ConsentRejected, ScaleError
+from .protocol.frames import UserListEntry, decode_pending_slots
 from .protocol.models import (
     SWAPPED_WEIGHT_SCALE_UUID,
     WEIGHT_SCALE_SERVICE_UUID,
     model_by_name,
 )
 from .protocol.readings import Reading
+from .protocol.scale_user import SlotState, explain_slot
+from .protocol.session import ScaleSession
+from .repairs import (
+    ScaleUserIssue,
+    async_clear_scale_user_issues,
+    async_raise_scale_user_issue,
+    async_scale_user_issue,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -112,11 +120,63 @@ class ScaleCoordinator:
         self._latest[slot] = readings[-1]
         self._async_update_listeners()
 
-    def _managed_slots(self) -> dict[int, ConfigSubentry]:
+    @callback
+    def async_check_user_list(
+        self, users: Sequence[UserListEntry], rejected_slot: int | None = None
+    ) -> bool:
+        """Raise repairs for the scale users the user list shows are broken.
+
+        A managed slot missing from the list was deleted on the scale; an empty
+        list means a factory reset. `rejected_slot` is a slot whose consent just
+        failed: if it is still listed, its consent code is wrong. Returns True
+        when a factory reset is newly detected, so the caller renews the bond
+        (once) while still connected.
+        """
+        newly_reset = False
+        for slot, subentry in self._scale_users().items():
+            match explain_slot(slot, users):
+                case SlotState.FACTORY_RESET:
+                    kind = ScaleUserIssue.FACTORY_RESET
+                case SlotState.DELETED:
+                    kind = ScaleUserIssue.SCALE_USER_DELETED
+                case SlotState.PRESENT if slot == rejected_slot:
+                    kind = ScaleUserIssue.WRONG_CONSENT_CODE
+                case _:
+                    continue
+            open_issue = async_scale_user_issue(self.hass, subentry.subentry_id)
+            if open_issue is kind:
+                continue
+            _LOGGER.warning(
+                "Scale user %s (slot %s) of %s needs a repair: %s",
+                subentry.title,
+                slot,
+                self.address,
+                kind,
+            )
+            newly_reset |= kind is ScaleUserIssue.FACTORY_RESET
+            async_raise_scale_user_issue(self.hass, self.entry, subentry, kind)
+        return newly_reset
+
+    async def async_rebond(self, session: ScaleSession) -> None:
+        """Renew the bond after a factory reset; a failure only logs."""
+        try:
+            await session.rebond()
+        except ScaleError as err:
+            _LOGGER.warning("Renewing the bond with %s failed: %r", self.address, err)
+
+    def _scale_users(self) -> dict[int, ConfigSubentry]:
         return {
             int(subentry.data[CONF_SLOT]): subentry
             for subentry in self.entry.subentries.values()
             if subentry.subentry_type == SUBENTRY_SCALE_USER
+        }
+
+    def _managed_slots(self) -> dict[int, ConfigSubentry]:
+        """The scale users to sync: those without an open repair issue."""
+        return {
+            slot: subentry
+            for slot, subentry in self._scale_users().items()
+            if async_scale_user_issue(self.hass, subentry.subentry_id) is None
         }
 
     @callback
@@ -147,9 +207,16 @@ class ScaleCoordinator:
             async with async_open_session(
                 self.hass, self.address, self.model, device
             ) as session:
-                result = await session.sync(
-                    slot, int(subentry.data[CONF_CONSENT_CODE]), dt_util.now()
-                )
+                try:
+                    result = await session.sync(
+                        slot, int(subentry.data[CONF_CONSENT_CODE]), dt_util.now()
+                    )
+                except ConsentRejected:
+                    # The user list, which needs no consent, tells why (§9.4b).
+                    users = await session.read_user_list()
+                    if self.async_check_user_list(users, rejected_slot=slot):
+                        await self.async_rebond(session)
+                    raise
         except ScaleError as err:
             _LOGGER.warning("Syncing slot %s of %s failed: %r", slot, self.address, err)
             self._retry_after = self.hass.loop.time() + RETRY_DELAY
@@ -158,6 +225,7 @@ class ScaleCoordinator:
             self._syncing = False
         self.battery_percent = result.battery_percent
         self.last_sync = dt_util.utcnow()
+        async_clear_scale_user_issues(self.hass, subentry.subentry_id)
         self._async_update_listeners()
         self.async_process_readings(slot, result.readings)
 
