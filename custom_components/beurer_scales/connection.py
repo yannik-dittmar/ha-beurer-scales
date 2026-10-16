@@ -1,4 +1,12 @@
-"""Reaching a scale from Home Assistant: waiting for a wake and opening a session."""
+"""Reaching a scale from Home Assistant: holding it, waiting for a wake and
+opening a session.
+
+The scale takes one connection at a time, so whoever talks to it (a flow, or
+the coordinator) holds it first with `async_hold_scale`. Flows wait their turn
+and keep the scale from the wait for the wake through the end of their session;
+the coordinator never waits behind a flow: it leaves the scale alone while
+`async_scale_held` and syncs at a later wake.
+"""
 
 import asyncio
 from collections.abc import AsyncIterator
@@ -15,6 +23,7 @@ from homeassistant.components.bluetooth import (
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_call_later
 
+from .const import DOMAIN
 from .protocol.errors import ScaleConnectionError
 from .protocol.models import ScaleModel
 from .protocol.session import ScaleSession, open_session
@@ -23,8 +32,31 @@ from .protocol.session import ScaleSession, open_session
 WAKE_TIMEOUT = 180
 
 
+_LOCKS = "scale_locks"
+
+
 class WakeTimeout(Exception):
     """Nobody woke the scale in time."""
+
+
+def _scale_lock(hass: HomeAssistant, address: str) -> asyncio.Lock:
+    locks: dict[str, asyncio.Lock] = hass.data.setdefault(DOMAIN, {}).setdefault(
+        _LOCKS, {}
+    )
+    return locks.setdefault(address, asyncio.Lock())
+
+
+@callback
+def async_scale_held(hass: HomeAssistant, address: str) -> bool:
+    """Whether a flow or the coordinator holds the scale right now."""
+    return _scale_lock(hass, address).locked()
+
+
+@asynccontextmanager
+async def async_hold_scale(hass: HomeAssistant, address: str) -> AsyncIterator[None]:
+    """Hold the scale, after whoever holds it now; nobody else connects meanwhile."""
+    async with _scale_lock(hass, address):
+        yield
 
 
 async def async_wait_for_wake(

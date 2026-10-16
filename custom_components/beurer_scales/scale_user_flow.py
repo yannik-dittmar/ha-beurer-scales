@@ -31,7 +31,12 @@ from homeassistant.helpers.selector import (
 )
 from homeassistant.util import dt as dt_util
 
-from .connection import WakeTimeout, async_open_session, async_wait_for_wake
+from .connection import (
+    WakeTimeout,
+    async_hold_scale,
+    async_open_session,
+    async_wait_for_wake,
+)
 from .const import (
     CONF_CONSENT_CODE,
     CONF_MODEL,
@@ -451,18 +456,19 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
         subentry = self._get_reconfigure_subentry()
         slot = int(subentry.data[CONF_SLOT])
         address: str = entry.data[CONF_ADDRESS]
-        await async_wait_for_wake(self.hass, address)
-        async with async_open_session(self.hass, address, self._model()) as session:
-            await session.set_time(dt_util.now())
-            # Consent releases the slot's stored readings (§3).
-            await session.subscribe_readings()
-            await session.consent(slot, int(subentry.data[CONF_CONSENT_CODE]))
-            # The scale user's entities exist: process them now, so a failed
-            # write doesn't lose them.
-            entry.runtime_data.async_process_readings(
-                slot, await session.collect_readings()
-            )
-            await session.write_profile(self._new_profile)
+        async with async_hold_scale(self.hass, address):
+            await async_wait_for_wake(self.hass, address)
+            async with async_open_session(self.hass, address, self._model()) as session:
+                await session.set_time(dt_util.now())
+                # Consent releases the slot's stored readings (§3).
+                await session.subscribe_readings()
+                await session.consent(slot, int(subentry.data[CONF_CONSENT_CODE]))
+                # The scale user's entities exist: process them now, so a failed
+                # write doesn't lose them.
+                entry.runtime_data.async_process_readings(
+                    slot, await session.collect_readings()
+                )
+                await session.write_profile(self._new_profile)
 
     async def async_step_failed(
         self, user_input: dict[str, Any] | None = None
@@ -541,19 +547,20 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
         """Wait for the wake, then check that the slot exists and the code works."""
         address: str = self._get_entry().data[CONF_ADDRESS]
         slot = int(self._input[CONF_SLOT])
-        await async_wait_for_wake(self.hass, address)
-        async with async_open_session(self.hass, address, self._model()) as session:
-            await session.set_time(dt_util.now())
-            # The scale answers a wrong code and a missing slot alike (§9.4b);
-            # the user list, which needs no consent, tells them apart.
-            users = await session.read_user_list()
-            profile = next((u for u in users if u.slot == slot), None)
-            if profile is None:
-                raise SlotNotFound(f"slot {slot}")
-            # Consent releases the slot's stored readings (§3).
-            await session.subscribe_readings()
-            await session.consent(slot, int(self._input[CONF_CONSENT_CODE]))
-            self._readings = await session.collect_readings()
+        async with async_hold_scale(self.hass, address):
+            await async_wait_for_wake(self.hass, address)
+            async with async_open_session(self.hass, address, self._model()) as session:
+                await session.set_time(dt_util.now())
+                # The scale answers a wrong code and a missing slot alike (§9.4b);
+                # the user list, which needs no consent, tells them apart.
+                users = await session.read_user_list()
+                profile = next((u for u in users if u.slot == slot), None)
+                if profile is None:
+                    raise SlotNotFound(f"slot {slot}")
+                # Consent releases the slot's stored readings (§3).
+                await session.subscribe_readings()
+                await session.consent(slot, int(self._input[CONF_CONSENT_CODE]))
+                self._readings = await session.collect_readings()
         return profile
 
     async def _async_create(self) -> CreatedScaleUser:
@@ -564,18 +571,22 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
         """
         assert self._new_profile is not None
         address: str = self._get_entry().data[CONF_ADDRESS]
-        await async_wait_for_wake(self.hass, address)
-        self._sync_start = dt_util.now()
-        async with async_open_session(
-            self.hass, address, self._model(), session_timeout=_create_session_timeout()
-        ) as session:
-            await session.set_time(dt_util.now())
-            async with create_scale_user(session, self._new_profile) as created:
-                self._check_slot_free(created.slot)
-                self._created = created
-                self._created_event.set()
-                await session.subscribe_readings()
-                await self._teaching.run(session)
+        async with async_hold_scale(self.hass, address):
+            await async_wait_for_wake(self.hass, address)
+            self._sync_start = dt_util.now()
+            async with async_open_session(
+                self.hass,
+                address,
+                self._model(),
+                session_timeout=_create_session_timeout(),
+            ) as session:
+                await session.set_time(dt_util.now())
+                async with create_scale_user(session, self._new_profile) as created:
+                    self._check_slot_free(created.slot)
+                    self._created = created
+                    self._created_event.set()
+                    await session.subscribe_readings()
+                    await self._teaching.run(session)
         return created
 
     def _progress_until(

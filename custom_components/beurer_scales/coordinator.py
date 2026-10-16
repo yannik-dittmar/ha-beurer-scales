@@ -20,7 +20,14 @@ that one moment per wake, so only one of them connects.
 """
 
 import logging
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import (
+    Awaitable,
+    Callable,
+    Collection,
+    Iterable,
+    Mapping,
+    Sequence,
+)
 from datetime import datetime
 from typing import Any
 
@@ -35,7 +42,7 @@ from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from .connection import async_open_session
+from .connection import async_hold_scale, async_open_session, async_scale_held
 from .discards import async_notify_discarded
 from .pending_deletions import PendingDeletions
 from .const import (
@@ -362,7 +369,12 @@ class ScaleCoordinator:
             self._pending_before_wake.update(pending)
         elif any(slot not in self._pending_before_wake for slot in pending):
             self._recognised = True
-        if self._syncing or self.hass.loop.time() < self._retry_after:
+        if (
+            self._syncing
+            or self.hass.loop.time() < self._retry_after
+            # A flow holding the scale goes first; the slots wait for a wake.
+            or async_scale_held(self.hass, self.address)
+        ):
             return
         managed = self._managed_slots()
         ignored = [slot for slot in pending if slot not in managed]
@@ -409,38 +421,60 @@ class ScaleCoordinator:
         first, *others = subentries
         slot = int(first.data[CONF_SLOT])
         sync_start = dt_util.now()
-        connected = False
         self._refused_later.discard(slot)
+
+        async def sync(session: ScaleSession) -> None:
+            try:
+                result = await session.sync(
+                    slot, int(first.data[CONF_CONSENT_CODE]), sync_start
+                )
+            except ConsentRejected:
+                # The user list, which needs no consent, tells why (§9.4b).
+                users = await session.read_user_list()
+                if self.async_check_user_list(users, rejected_slot=slot):
+                    await self.async_rebond(session)
+                raise
+            async_delete_pairing_issue(self.hass, self.entry)
+            async_clear_scale_user_issues(self.hass, first.subentry_id)
+            self.battery_percent = result.battery_percent
+            self.last_sync = dt_util.utcnow()
+            self._async_update_listeners()
+            self._leftovers.discard(slot)
+            self.async_process_readings(slot, result.readings, sync_start)
+            await self._async_drain(session, others, sync_start)
+            # The weigh-in is final once its slot is listed as pending.
+            await self._async_run_pending_deletions(session, consented=True)
+
         try:
-            async with async_open_session(
-                self.hass, self.address, self.model, device
-            ) as session:
-                connected = True
-                try:
-                    result = await session.sync(
-                        slot, int(first.data[CONF_CONSENT_CODE]), sync_start
-                    )
-                except ConsentRejected:
-                    # The user list, which needs no consent, tells why (§9.4b).
-                    users = await session.read_user_list()
-                    if self.async_check_user_list(users, rejected_slot=slot):
-                        await self.async_rebond(session)
-                    raise
-                async_delete_pairing_issue(self.hass, self.entry)
-                async_clear_scale_user_issues(self.hass, first.subentry_id)
-                self.battery_percent = result.battery_percent
-                self.last_sync = dt_util.utcnow()
-                self._async_update_listeners()
-                self._leftovers.discard(slot)
-                self.async_process_readings(slot, result.readings, sync_start)
-                await self._async_drain(session, others, sync_start)
-                # The weigh-in is final once its slot is listed as pending.
-                await self._async_run_pending_deletions(session, consented=True)
+            await self._async_in_session(sync, device)
         except ScaleError as err:
             _LOGGER.warning("Syncing slot %s of %s failed: %r", slot, self.address, err)
             if isinstance(err, PairingUnsupported | PairingFailed):
                 async_create_pairing_issue(self.hass, self.entry)
             self._retry_after = self.hass.loop.time() + RETRY_DELAY
+
+    async def _async_in_session(
+        self,
+        work: Callable[[ScaleSession], Awaitable[None]],
+        device: BLEDevice | None = None,
+    ) -> None:
+        """Hold the scale and run `work` in a session; the scale sleeps after it.
+
+        Leaves the scale alone if a flow holds it: the work waits for a later
+        wake. Raises ScaleError.
+        """
+        connected = False
+        try:
+            if async_scale_held(self.hass, self.address):
+                return
+            async with (
+                async_hold_scale(self.hass, self.address),
+                async_open_session(
+                    self.hass, self.address, self.model, device
+                ) as session,
+            ):
+                connected = True
+                await work(session)
         finally:
             self._syncing = False
             if connected:
@@ -498,7 +532,7 @@ class ScaleCoordinator:
         otherwise nobody HA manages was recognised: read the user list and run
         the deletions in one connection.
         """
-        if self._syncing:
+        if self._syncing or async_scale_held(self.hass, self.address):
             return
         if self._due:
             self._async_start_sync()
@@ -517,24 +551,18 @@ class ScaleCoordinator:
         )
 
     async def _async_check_session(self) -> None:
-        connected = False
+        async def check(session: ScaleSession) -> None:
+            users = await session.read_user_list()
+            if self.async_check_user_list(users):
+                await self.async_rebond(session)
+            await self._async_run_pending_deletions(session, consented=False)
+
         try:
-            async with async_open_session(
-                self.hass, self.address, self.model
-            ) as session:
-                connected = True
-                users = await session.read_user_list()
-                if self.async_check_user_list(users):
-                    await self.async_rebond(session)
-                await self._async_run_pending_deletions(session, consented=False)
+            await self._async_in_session(check)
         except ScaleError as err:
             _LOGGER.warning(
                 "Checking the scale users of %s failed: %r", self.address, err
             )
-        finally:
-            self._syncing = False
-            if connected:
-                self.wakes.async_asleep()
 
     async def _async_run_pending_deletions(
         self, session: ScaleSession, *, consented: bool
