@@ -9,14 +9,20 @@ from homeassistant.components.bluetooth import (
     BluetoothServiceInfoBleak,
     async_get_advertisement_callback,
 )
+from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 # HA mounts the test plugin's config dir, which ships its own `custom_components`
 # package. Importing ours first makes HA find this repo's integrations.
 import custom_components  # noqa: F401
+from custom_components.beurer_scales.const import CONF_MODEL, DOMAIN
+from custom_components.beurer_scales.protocol.models import (
+    SWAPPED_WEIGHT_SCALE_UUID as SWAPPED_WEIGHT_SCALE_UUID,
+)
 
 SCALE_ADDRESS = "AA:BB:CC:DD:EE:01"
-PENDING_SLOTS_UUID = "00001d18-0000-1000-8000-00805f9b34fb"
+WEIGHT_SCALE_UUID = "0000181d-0000-1000-8000-00805f9b34fb"
 
 
 @pytest.fixture(autouse=True)
@@ -35,20 +41,36 @@ def auto_enable_bluetooth(
     """
 
 
+@pytest.fixture
+def configured_scale(hass: HomeAssistant) -> MockConfigEntry:
+    """A BF450 that is already set up."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=SCALE_ADDRESS,
+        data={CONF_ADDRESS: SCALE_ADDRESS, CONF_MODEL: "BF450"},
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
 def scale_advertisement(
     address: str = SCALE_ADDRESS,
     local_name: str | None = "BF450",
-    pending_slots: bytes | None = b"",
+    service_data: dict[str, bytes] | None = None,
     rssi: int = -60,
 ) -> BluetoothServiceInfoBleak:
-    """Build an advertisement as a BF450 sends it after waking up."""
-    service_data = {} if pending_slots is None else {PENDING_SLOTS_UUID: pending_slots}
-    service_uuids = [PENDING_SLOTS_UUID] if pending_slots is not None else []
+    """Build an advertisement as a BF450 sends it after waking up.
+
+    By default it carries an empty pending-slot list under the byte-swapped
+    0x181D UUID, like a BF450 with no unsynced readings.
+    """
+    if service_data is None:
+        service_data = {SWAPPED_WEIGHT_SCALE_UUID: b""}
     advertisement = AdvertisementData(
         local_name=local_name,
         manufacturer_data={0x1106: b"\x00\x01\x00"},
         service_data=service_data,
-        service_uuids=service_uuids,
+        service_uuids=list(service_data),
         tx_power=None,
         rssi=rssi,
         platform_data=(),
@@ -59,7 +81,7 @@ def scale_advertisement(
         rssi=rssi,
         manufacturer_data=advertisement.manufacturer_data,
         service_data=service_data,
-        service_uuids=service_uuids,
+        service_uuids=list(service_data),
         source="local",
         device=BLEDevice(address, local_name, {}),
         advertisement=advertisement,
