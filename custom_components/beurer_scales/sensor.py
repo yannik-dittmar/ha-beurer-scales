@@ -212,6 +212,27 @@ METRIC_SENSORS: dict[Metric, SensorEntityDescription] = {
     Metric.SUBCUTANEOUS_FAT: _plain(Metric.SUBCUTANEOUS_FAT, PERCENTAGE, 1),
     Metric.IDEAL_WEIGHT: _mass(Metric.IDEAL_WEIGHT, enabled=False),
     Metric.IMPEDANCE: _plain(Metric.IMPEDANCE, "Ω", 0, enabled=False),
+    # Metrics of models other than the BF450 (protocol doc §5.4).
+    Metric.HEART_RATE: _plain(Metric.HEART_RATE, "bpm", 0),
+    **{
+        metric: _plain(metric, PERCENTAGE, 1)
+        for metric in (
+            Metric.UPPER_BODY_FAT,
+            Metric.LOWER_BODY_FAT,
+            Metric.UPPER_BODY_MUSCLE,
+            Metric.LOWER_BODY_MUSCLE,
+            Metric.LEFT_ARM_FAT,
+            Metric.RIGHT_ARM_FAT,
+            Metric.LEFT_LEG_FAT,
+            Metric.RIGHT_LEG_FAT,
+            Metric.TORSO_FAT,
+            Metric.LEFT_ARM_MUSCLE,
+            Metric.RIGHT_ARM_MUSCLE,
+            Metric.LEFT_LEG_MUSCLE,
+            Metric.RIGHT_LEG_MUSCLE,
+            Metric.TORSO_MUSCLE,
+        )
+    },
 }
 
 

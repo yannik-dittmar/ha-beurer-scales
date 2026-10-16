@@ -4,7 +4,11 @@ from unittest.mock import patch
 
 import pytest
 from homeassistant.components.bluetooth.match import ble_device_matches
-from homeassistant.config_entries import SOURCE_BLUETOOTH, SOURCE_USER
+from homeassistant.config_entries import (
+    SOURCE_BLUETOOTH,
+    SOURCE_USER,
+    ConfigEntryState,
+)
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
@@ -13,6 +17,7 @@ from homeassistant.loader import async_get_integration
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.beurer_scales.const import DOMAIN
+from custom_components.beurer_scales.protocol.models import MODELS, ScaleModel
 
 from .conftest import (
     SCALE_ADDRESS,
@@ -174,3 +179,72 @@ async def test_manual_add_skips_configured_scales_and_other_devices(
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "no_devices_found"
+
+
+@pytest.mark.parametrize("model", MODELS, ids=lambda m: m.name)
+async def test_every_family_model_name_is_matched(
+    hass: HomeAssistant, model: ScaleModel
+) -> None:
+    """Discovery listens for the local name of every BF600-family model."""
+    integration = await async_get_integration(hass, DOMAIN)
+    advertisement = scale_advertisement(local_name=model.name, service_data={})
+
+    assert integration.bluetooth
+    assert any(ble_device_matches(m, advertisement) for m in integration.bluetooth)
+
+
+async def test_discovered_untested_model_warns_and_still_adds_the_scale(
+    hass: HomeAssistant,
+) -> None:
+    """An untested model is offered with a warning, then set up like any other."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": SOURCE_BLUETOOTH},
+        data=scale_advertisement(local_name="BF600"),
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "untested_model"
+    assert result["description_placeholders"] == {"name": "Beurer BF600"}
+
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == "Beurer BF600"
+    assert result["data"] == {CONF_ADDRESS: SCALE_ADDRESS, "model": "BF600"}
+    assert result["result"].state is ConfigEntryState.LOADED
+
+
+async def test_verified_bf451_needs_no_warning(hass: HomeAssistant) -> None:
+    """The BF451 is verified like the BF450: plain confirmation."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": SOURCE_BLUETOOTH},
+        data=scale_advertisement(local_name="BF451"),
+    )
+
+    assert result["step_id"] == "bluetooth_confirm"
+
+
+async def test_manually_added_untested_model_warns_and_still_adds_the_scale(
+    hass: HomeAssistant,
+) -> None:
+    """Picking an untested model from the nearby scales shows the warning too."""
+    await inject_advertisement(
+        hass, scale_advertisement(local_name="BF1000", service_data={})
+    )
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_ADDRESS: SCALE_ADDRESS}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "untested_model"
+    assert result["description_placeholders"] == {"name": "Beurer BF1000"}
+
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"] == {CONF_ADDRESS: SCALE_ADDRESS, "model": "BF1000"}

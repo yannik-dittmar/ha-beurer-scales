@@ -58,6 +58,8 @@ class BeurerScalesConfigFlow(ConfigFlow, domain=DOMAIN):
         self._address = discovery_info.address
         self._model = model
         self.context["title_placeholders"] = {"name": _display_name(model)}
+        if not model.verified:
+            return await self.async_step_untested_model()
         return await self.async_step_bluetooth_confirm()
 
     async def async_step_bluetooth_confirm(
@@ -81,7 +83,12 @@ class BeurerScalesConfigFlow(ConfigFlow, domain=DOMAIN):
             address = user_input[CONF_ADDRESS]
             await self.async_set_unique_id(address, raise_on_progress=False)
             self._abort_if_unique_id_configured()
-            return self._create_scale_entry(address, self._discovered[address])
+            picked = self._discovered[address]
+            if not picked.verified:
+                self._address = address
+                self._model = picked
+                return await self.async_step_untested_model()
+            return self._create_scale_entry(address, picked)
 
         configured = self._async_current_ids(include_ignore=False)
         # Connectable advertisements only: a scale that HA can't connect to can't sync.
@@ -107,6 +114,19 @@ class BeurerScalesConfigFlow(ConfigFlow, domain=DOMAIN):
                     )
                 }
             ),
+        )
+
+    async def async_step_untested_model(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Warn that the model is untested; confirming adds it all the same."""
+        assert self._address is not None and self._model is not None
+        if user_input is not None:
+            return self._create_scale_entry(self._address, self._model)
+        self._set_confirm_only()
+        return self.async_show_form(
+            step_id="untested_model",
+            description_placeholders={"name": _display_name(self._model)},
         )
 
     def _create_scale_entry(self, address: str, model: ScaleModel) -> ConfigFlowResult:
