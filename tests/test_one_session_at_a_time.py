@@ -10,6 +10,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from . import frames
 from .conftest import SWAPPED_WEIGHT_SCALE_UUID, scale_advertisement, wake_scale
 from .fake_scale import FakeReading, FakeScale
+from .test_adopt_scale_user import start_adopt
 from .test_create_scale_user import CREATE_INPUT, start_create, submit_and_wake
 from .test_sync import WEIGHT, anna_scale, local_now, state
 from .test_teach_scale_user import until_disconnected
@@ -55,3 +56,23 @@ async def test_the_coordinator_leaves_the_scale_to_a_teaching_flow(
 
     assert state(hass, WEIGHT).state == "78.4"
     assert fake_scale.service_data()[SWAPPED_WEIGHT_SCALE_UUID] == b""
+
+
+async def test_a_flow_closed_while_waiting_for_the_wake_lets_go_of_the_scale(
+    hass: HomeAssistant, anna: MockConfigEntry, fake_scale: FakeScale
+) -> None:
+    """Once the adopt flow is closed, Anna's weigh-in syncs as usual."""
+    fake_scale.add_user(slot=3, consent_code=5678)
+    result = await start_adopt(hass, anna)
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], {"name": "Bob", "slot": 3, "consent_code": 5678}
+    )
+    hass.config_entries.subentries.async_abort(result["flow_id"])
+    await hass.async_block_till_done()
+
+    fake_scale.weigh_in(
+        2, FakeReading.from_capture(frames.READING_SLOT_2, at=local_now())
+    )
+    await wake_scale(hass, fake_scale)
+
+    assert state(hass, WEIGHT).state == "78.4"

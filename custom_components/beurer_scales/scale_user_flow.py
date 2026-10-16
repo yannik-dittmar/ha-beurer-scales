@@ -1,7 +1,7 @@
 """The "Add scale user" subentry flow: create a new scale user or adopt a slot."""
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from datetime import date, datetime
 from types import MappingProxyType
 from typing import Any
@@ -100,6 +100,16 @@ def profile_data(profile: UserListEntry | Profile) -> dict[str, Any]:
     }
 
 
+def profile_from_data(data: Mapping[str, Any]) -> Profile:
+    """Return the profile of a form's input or a subentry's stored profile."""
+    return Profile(
+        birth_date=date.fromisoformat(data[PROFILE_BIRTH_DATE]),
+        height_cm=int(data[PROFILE_HEIGHT_CM]),
+        gender=Gender(data[PROFILE_GENDER]),
+        activity_level=int(data[PROFILE_ACTIVITY_LEVEL]),
+    )
+
+
 class ScaleUserSubentryFlow(ConfigSubentryFlow):
     """Add a scale user to a scale."""
 
@@ -111,7 +121,8 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
         # Errors to show when the progress step returns to the form.
         self._errors: dict[str, str] = {}
         self._abort_reason = ""
-        self._task: asyncio.Task[UserListEntry] | None = None
+        # The adopt, repair adopt or reconfigure task the wake step waits for.
+        self._task: asyncio.Task[Any] | None = None
         self._profile: UserListEntry | None = None
         # The create path.
         self._new_profile: Profile | None = None
@@ -123,10 +134,8 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
         # When the create task connected, for the backlog rule.
         self._sync_start: datetime | None = None
         # What the progress step shown right now waits for.
-        self._milestone: asyncio.Task[None] | None = None
+        self._milestone: asyncio.Task[Any] | None = None
         self._entry_created = False
-        # The reconfigure path.
-        self._reconfigure_task: asyncio.Task[None] | None = None
         # Readings the scale delivered when the flow consented.
         self._readings: list[Reading] = []
 
@@ -149,15 +158,7 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
             if not errors:
                 return await self.async_step_create_wake()
 
-        schema = probatio.Schema(
-            {
-                probatio.Optional(CONF_PERSON): EntitySelector(
-                    EntitySelectorConfig(domain="person")
-                ),
-                probatio.Optional(CONF_NAME): TextSelector(),
-                **_profile_fields(),
-            }
-        )
+        schema = probatio.Schema({**_identity_fields(), **_profile_fields()})
         return self.async_show_form(
             step_id="create",
             data_schema=self.add_suggested_values_to_schema(schema, self._input),
@@ -174,7 +175,9 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
                 self.hass, self._async_create(), "beurer_scales create scale user"
             )
         if result := self._progress_until(
-            "create_wake", "create", self._created_event.wait
+            "create_wake",
+            "create",
+            lambda: self._until_create_ends(self._created_event.wait(), "create"),
         ):
             return result
         if self._create_task.done() and (reason := self._create_failure()):
@@ -189,7 +192,9 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
         if result := self._progress_until(
             "teach",
             "teach",
-            lambda: self._async_until_reading(taken + 1),
+            lambda: self._until_create_ends(
+                self._async_until_reading(taken + 1), "teach"
+            ),
             {"reading": str(taken + 1), "readings": str(TEACHING_READINGS)},
         ):
             return result
@@ -285,10 +290,7 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
 
         schema = probatio.Schema(
             {
-                probatio.Optional(CONF_PERSON): EntitySelector(
-                    EntitySelectorConfig(domain="person")
-                ),
-                probatio.Optional(CONF_NAME): TextSelector(),
+                **_identity_fields(),
                 probatio.Required(CONF_SLOT): NumberSelector(
                     NumberSelectorConfig(
                         min=1,
@@ -297,11 +299,7 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
                         mode=NumberSelectorMode.BOX,
                     )
                 ),
-                probatio.Required(CONF_CONSENT_CODE): NumberSelector(
-                    NumberSelectorConfig(
-                        min=0, max=9999, step=1, mode=NumberSelectorMode.BOX
-                    )
-                ),
+                **_consent_code_field(),
             }
         )
         return self.async_show_form(
@@ -314,16 +312,10 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
         """Wait for someone to step on the scale, then verify the slot."""
-        if self._task is None:
-            self._task = self.hass.async_create_task(self._async_adopt())
-        if not self._task.done():
-            return self.async_show_progress(
-                step_id="wake", progress_action="wake", progress_task=self._task
-            )
-
-        task, self._task = self._task, None
+        if result := self._progress_until_task("wake", "wake", self._async_adopt):
+            return result
         try:
-            self._profile = task.result()
+            self._profile = self._finished_task().result()
         except SlotNotFound:
             return self._progress_error({CONF_SLOT: "slot_not_found"})
         except ConsentRejected:
@@ -345,13 +337,11 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
         return self.async_create_entry(
             title=self._name,
             unique_id=slot_unique_id(self._profile.slot),
-            data={
-                CONF_SLOT: self._profile.slot,
-                CONF_CONSENT_CODE: int(self._input[CONF_CONSENT_CODE]),
-                CONF_NAME: self._name,
-                CONF_PERSON: self._person_id,
-                CONF_PROFILE: profile_data(self._profile),
-            },
+            data=self._subentry_data(
+                self._profile.slot,
+                int(self._input[CONF_CONSENT_CODE]),
+                self._profile,
+            ),
         )
 
     # --- Reconfigure: change the name, person or profile (design §4.2) ---
@@ -373,15 +363,7 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
                     return self._async_save_reconfigure()
                 return await self.async_step_reconfigure_wake()
 
-        schema = probatio.Schema(
-            {
-                probatio.Optional(CONF_PERSON): EntitySelector(
-                    EntitySelectorConfig(domain="person")
-                ),
-                probatio.Optional(CONF_NAME): TextSelector(),
-                **_profile_fields(),
-            }
-        )
+        schema = probatio.Schema({**_identity_fields(), **_profile_fields()})
         return self.async_show_form(
             step_id="reconfigure",
             data_schema=self.add_suggested_values_to_schema(
@@ -394,20 +376,12 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
         """Wait for the wake, then write the new profile to the scale."""
-        if self._reconfigure_task is None:
-            self._reconfigure_task = self.hass.async_create_task(
-                self._async_write_profile()
-            )
-        if not self._reconfigure_task.done():
-            return self.async_show_progress(
-                step_id="reconfigure_wake",
-                progress_action="reconfigure",
-                progress_task=self._reconfigure_task,
-            )
-
-        task, self._reconfigure_task = self._reconfigure_task, None
+        if result := self._progress_until_task(
+            "reconfigure_wake", "reconfigure", self._async_write_profile
+        ):
+            return result
         try:
-            task.result()
+            self._finished_task().result()
         except ConsentRejected:
             return self._progress_failed("consent_rejected")
         except (WakeTimeout, ScaleError) as err:
@@ -427,11 +401,7 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
             self._get_entry(),
             self._get_reconfigure_subentry(),
             title=self._name,
-            data_updates={
-                CONF_NAME: self._name,
-                CONF_PERSON: self._person_id,
-                CONF_PROFILE: profile_data(self._new_profile),
-            },
+            data_updates=self._identity_data(self._new_profile),
         )
 
     def _reconfigure_form_values(self, subentry: ConfigSubentry) -> dict[str, Any]:
@@ -460,15 +430,13 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
         async with async_hold_scale(self.hass, address):
             await async_wait_for_wake(self.hass, address)
             async with async_open_session(self.hass, address, self._model()) as session:
-                await session.set_time(dt_util.now())
                 # Consent releases the slot's stored readings (§3).
-                await session.subscribe_readings()
-                await session.consent(slot, int(subentry.data[CONF_CONSENT_CODE]))
+                result = await session.sync(
+                    slot, int(subentry.data[CONF_CONSENT_CODE]), dt_util.now()
+                )
                 # The scale user's entities exist: process them now, so a failed
                 # write doesn't lose them.
-                entry.runtime_data.async_process_readings(
-                    slot, await session.collect_readings()
-                )
+                entry.runtime_data.async_process_readings(slot, result.readings)
                 await session.write_profile(self._new_profile)
 
     async def async_step_failed(
@@ -536,12 +504,7 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
         if not MIN_AGE <= age <= MAX_AGE:
             return {PROFILE_BIRTH_DATE: "invalid_birth_date"}
 
-        self._new_profile = Profile(
-            birth_date=birth_date,
-            height_cm=int(user_input[PROFILE_HEIGHT_CM]),
-            gender=Gender(user_input[PROFILE_GENDER]),
-            activity_level=int(user_input[PROFILE_ACTIVITY_LEVEL]),
-        )
+        self._new_profile = profile_from_data(user_input)
         return {}
 
     async def _async_adopt(self) -> UserListEntry:
@@ -551,7 +514,6 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
         async with async_hold_scale(self.hass, address):
             await async_wait_for_wake(self.hass, address)
             async with async_open_session(self.hass, address, self._model()) as session:
-                await session.set_time(dt_util.now())
                 # The scale answers a wrong code and a missing slot alike (§9.4b);
                 # the user list, which needs no consent, tells them apart.
                 users = await session.read_user_list()
@@ -559,9 +521,10 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
                 if profile is None:
                     raise SlotNotFound(f"slot {slot}")
                 # Consent releases the slot's stored readings (§3).
-                await session.subscribe_readings()
-                await session.consent(slot, int(self._input[CONF_CONSENT_CODE]))
-                self._readings = await session.collect_readings()
+                result = await session.sync(
+                    slot, int(self._input[CONF_CONSENT_CODE]), dt_util.now()
+                )
+                self._readings = result.readings
         return profile
 
     async def _async_create(self) -> CreatedScaleUser:
@@ -594,17 +557,15 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
         self,
         step_id: str,
         progress_action: str,
-        milestone: Callable[[], Awaitable[Any]],
+        milestone: Callable[[], asyncio.Task[Any]],
         description_placeholders: Mapping[str, str] | None = None,
     ) -> SubentryFlowResult | None:
-        """Show a progress step until `milestone` or the create task is done.
+        """Show a progress step until the task `milestone` starts is done.
 
         Returns None once it is done; the step then decides where to go.
         """
         if self._milestone is None:
-            self._milestone = self.hass.async_create_background_task(
-                self._async_until_either(milestone()), f"beurer_scales {step_id}"
-            )
+            self._milestone = milestone()
         elif self._milestone.done():
             self._milestone = None
             return None
@@ -613,6 +574,40 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
             progress_action=progress_action,
             progress_task=self._milestone,
             description_placeholders=description_placeholders,
+        )
+
+    def _progress_until_task(
+        self,
+        step_id: str,
+        progress_action: str,
+        work: Callable[[], Coroutine[Any, Any, Any]],
+    ) -> SubentryFlowResult | None:
+        """Start `work` once and show a progress step until it is done.
+
+        Returns None once it is done; the step then takes `_finished_task`.
+        """
+        if self._task is None:
+            self._task = self.hass.async_create_task(work())
+        task = self._task
+        return self._progress_until(step_id, progress_action, lambda: task)
+
+    def _finished_task(self) -> asyncio.Task[Any]:
+        """The task `_progress_until_task` waited for; the next wake starts anew."""
+        task, self._task = self._task, None
+        assert task is not None
+        assert task.done()
+        return task
+
+    def _until_create_ends(
+        self, milestone: Awaitable[Any], name: str
+    ) -> asyncio.Task[None]:
+        """A task that ends at `milestone` or with the create task, if earlier.
+
+        A background task: teaching holds it open, and tests that wait for
+        HA's tasks must not wait for teaching.
+        """
+        return self.hass.async_create_background_task(
+            self._async_until_either(milestone), f"beurer_scales {name}"
         )
 
     async def _async_until_either(self, milestone: Awaitable[Any]) -> None:
@@ -675,12 +670,26 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
         """The subentry data of the created scale user."""
         assert self._created is not None
         assert self._new_profile is not None
+        return self._subentry_data(
+            self._created.slot, self._created.consent_code, self._new_profile
+        )
+
+    def _subentry_data(
+        self, slot: int, consent_code: int, profile: UserListEntry | Profile
+    ) -> dict[str, Any]:
+        """The data of a new scale user subentry."""
         return {
-            CONF_SLOT: self._created.slot,
-            CONF_CONSENT_CODE: self._created.consent_code,
+            CONF_SLOT: slot,
+            CONF_CONSENT_CODE: consent_code,
+            **self._identity_data(profile),
+        }
+
+    def _identity_data(self, profile: UserListEntry | Profile) -> dict[str, Any]:
+        """Who the scale user is: the subentry data the forms change."""
+        return {
             CONF_NAME: self._name,
             CONF_PERSON: self._person_id,
-            CONF_PROFILE: profile_data(self._new_profile),
+            CONF_PROFILE: profile_data(profile),
         }
 
     def _keep_teaching_readings(self) -> None:
@@ -711,15 +720,7 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
             }
             return await self.async_step_repair_adopt_wake()
 
-        schema = probatio.Schema(
-            {
-                probatio.Required(CONF_CONSENT_CODE): NumberSelector(
-                    NumberSelectorConfig(
-                        min=0, max=9999, step=1, mode=NumberSelectorMode.BOX
-                    )
-                ),
-            }
-        )
+        schema = probatio.Schema(_consent_code_field())
         return self.async_show_form(
             step_id="repair_adopt",
             data_schema=schema,
@@ -734,18 +735,12 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
         """Wait for the wake, then verify the code like adopt does."""
-        if self._task is None:
-            self._task = self.hass.async_create_task(self._async_adopt())
-        if not self._task.done():
-            return self.async_show_progress(
-                step_id="repair_adopt_wake",
-                progress_action="wake",
-                progress_task=self._task,
-            )
-
-        task, self._task = self._task, None
+        if result := self._progress_until_task(
+            "repair_adopt_wake", "wake", self._async_adopt
+        ):
+            return result
         try:
-            self._profile = task.result()
+            self._profile = self._finished_task().result()
         except SlotNotFound:
             return self._progress_failed("slot_now_empty")
         except ConsentRejected:
@@ -784,12 +779,7 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
         if not stored.get(PROFILE_BIRTH_DATE) or not stored.get(PROFILE_HEIGHT_CM):
             return self.async_abort(reason="profile_unknown")
         if user_input is not None:
-            self._new_profile = Profile(
-                birth_date=date.fromisoformat(stored[PROFILE_BIRTH_DATE]),
-                height_cm=int(stored[PROFILE_HEIGHT_CM]),
-                gender=Gender(stored[PROFILE_GENDER]),
-                activity_level=int(stored[PROFILE_ACTIVITY_LEVEL]),
-            )
+            self._new_profile = profile_from_data(stored)
             self._name = subentry.title
             self._person_id = subentry.data.get(CONF_PERSON)
             return await self.async_step_create_wake()
@@ -864,6 +854,25 @@ def _create_session_timeout() -> float:
         protocol_session.SESSION_TIMEOUT
         + TEACHING_READINGS * protocol_teaching.TEACHING_TIMEOUT
     )
+
+
+def _identity_fields() -> dict[probatio.Marker, Any]:
+    """The person and name fields of the create, adopt and reconfigure forms."""
+    return {
+        probatio.Optional(CONF_PERSON): EntitySelector(
+            EntitySelectorConfig(domain="person")
+        ),
+        probatio.Optional(CONF_NAME): TextSelector(),
+    }
+
+
+def _consent_code_field() -> dict[probatio.Marker, Any]:
+    """The consent code field of the adopt and repair adopt forms."""
+    return {
+        probatio.Required(CONF_CONSENT_CODE): NumberSelector(
+            NumberSelectorConfig(min=0, max=9999, step=1, mode=NumberSelectorMode.BOX)
+        ),
+    }
 
 
 def _profile_fields() -> dict[probatio.Marker, Any]:
