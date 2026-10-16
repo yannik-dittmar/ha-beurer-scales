@@ -1,0 +1,22 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "bluetooth_confirm": {
+        "description": "Do you want to set up {name}? Setting up the scale doesn't connect to it; scale users are added afterwards."
+      },
+      "user": {
+        "description": "Choose a Beurer scale that Home Assistant has seen nearby. Step on the scale to wake it if it isn't listed.",
+        "data": {
+          "address": "Scale"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "This scale is already set up.",
+      "already_in_progress": "This scale is already being set up.",
+      "no_devices_found": "No unconfigured Beurer scale has been seen nearby. Step on the scale to wake it, then try again.",
+      "not_supported": "This scale model isn't supported."
+    }
+  }
+}

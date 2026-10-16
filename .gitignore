@@ -1,0 +1,10 @@
+# Live probe output (tools/probe.py): contains real weigh-ins, profiles and consent codes
+runs/
+users.json
+adv.jsonl
+log.txt
+
+# Python / tooling
+.venv/
+__pycache__/
+.pytest_cache/
