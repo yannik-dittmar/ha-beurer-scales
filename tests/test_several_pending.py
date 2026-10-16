@@ -167,3 +167,33 @@ async def test_unmanaged_pending_slots_are_ignored_quietly(
     about_slot_3 = [r for r in caplog.records if "[3]" in r.getMessage()]
     assert about_slot_3
     assert {r.levelno for r in about_slot_3} == {logging.DEBUG}
+
+
+# The sync waits for a quiet period, so time has to run.
+@pytest.mark.freeze_time(tick=True)
+async def test_a_slot_refused_in_the_same_connection_goes_first_next_time(
+    hass: HomeAssistant,
+    household: MockConfigEntry,
+    fake_scale: FakeScale,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """Ben's next consent is the first of its connection, even if Anna weighs in.
+
+    Only a connection's first consent tells a wrong code from a scale that
+    takes one consent per connection (design §8, V2).
+    """
+    fake_scale.second_consent = "rejected"
+    weigh_in(fake_scale, 1)
+    weigh_in(fake_scale, 2)
+    await wake_scale(hass, fake_scale)
+    assert consents(fake_scale) == [2, 1]
+    assert pending(fake_scale) == b"\x01"
+
+    # Next wake: Ben's slot is still listed, then Anna's weigh-in is final.
+    await wake_scale(hass, fake_scale)
+    weigh_in(fake_scale, 2)
+    await wake_scale(hass, fake_scale)
+
+    assert consents(fake_scale)[2:] == [1, 2]
+    assert state(hass, BEN_WEIGHT).state == "77.9"
+    assert pending(fake_scale) == b"\x02"

@@ -277,3 +277,33 @@ async def test_a_leftover_slot_and_the_deletion_share_one_connection(
     assert state(hass, WEIGHT).state == "78.4"
     assert 3 not in fake_scale.users
     assert fake_scale.connection_attempts == attempts + 1
+
+
+# The sync waits for a quiet period, so time has to run.
+@pytest.mark.freeze_time(tick=True)
+async def test_a_refused_second_consent_keeps_the_pending_deletion(
+    hass: HomeAssistant,
+    scale: MockConfigEntry,
+    fake_scale: FakeScale,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """Refused after Anna's sync, Bob's deletion runs alone at a later wake.
+
+    A scale may refuse every consent after the first in a connection (design
+    §8, V2): that says nothing about Bob's code.
+    """
+    fake_scale.second_consent = "rejected"
+    await remove_bob(hass, scale)
+    fake_scale.weigh_in(
+        2, FakeReading.from_capture(frames.READING_SLOT_2, at=local_now())
+    )
+
+    await wake_scale(hass, fake_scale)
+    assert state(hass, WEIGHT).state == "78.4"
+    assert 3 in fake_scale.users
+
+    await wake_scale(hass, fake_scale)
+    await stay_awake(hass, freezer, fake_scale, 26)
+
+    assert 3 not in fake_scale.users
+    assert not fake_scale.connected

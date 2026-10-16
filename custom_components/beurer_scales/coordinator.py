@@ -112,18 +112,26 @@ def pending_slots(service_data: Mapping[str, bytes]) -> tuple[int, ...]:
     return ()
 
 
-def sync_order(pending: Sequence[int], leftovers: Collection[int]) -> list[int]:
+def sync_order(
+    pending: Sequence[int],
+    leftovers: Collection[int],
+    refused: Collection[int] = (),
+) -> list[int]:
     """The order to sync managed pending slots in: the newest weigh-in first.
 
     `leftovers` are the slots HA already saw pending and hasn't synced yet. The
     others just became pending. The scale appends a slot to its list when that
     weigh-in is final (protocol doc §2), so among several of either kind the
-    last one listed is taken as the newest. Unverified on hardware (V2): adjust
-    here only.
+    last one listed is taken as the newest. `refused` are slots the scale
+    refused as a later consent of a connection: they go first, because only a
+    connection's first consent tells a wrong code apart. Unverified on hardware
+    (V2): adjust here only.
     """
-    fresh = [slot for slot in pending if slot not in leftovers]
-    rest = [slot for slot in pending if slot in leftovers]
-    return [*reversed(fresh), *reversed(rest)]
+    first = [slot for slot in pending if slot in refused]
+    others = [slot for slot in pending if slot not in refused]
+    fresh = [slot for slot in others if slot not in leftovers]
+    rest = [slot for slot in others if slot in leftovers]
+    return [*first, *reversed(fresh), *reversed(rest)]
 
 
 def subentries_snapshot(entry: ConfigEntry[Any]) -> dict[str, Any]:
@@ -177,6 +185,10 @@ class ScaleCoordinator:
         self._retry_after = 0.0
         # Managed slots seen pending and not synced yet (see `sync_order`).
         self._leftovers: set[int] = set()
+        # Slots (managed, or pending deletion) the scale refused as a later
+        # consent of a connection: their next consent must be a connection's
+        # first (design §8, V2).
+        self._refused_later: set[int] = set()
         self._ignored: list[int] = []
         # Slots pending since before this wake, and whether one was appended.
         self._pending_before_wake: set[int] = set()
@@ -370,7 +382,11 @@ class ScaleCoordinator:
     def _async_start_sync(self) -> None:
         """Sync the slots of the last advertisement that are still managed."""
         managed = self._managed_slots()
-        order = sync_order([s for s in self._due if s in managed], self._leftovers)
+        order = sync_order(
+            [s for s in self._due if s in managed],
+            self._leftovers,
+            self._refused_later,
+        )
         self._leftovers.update(order)
         if not order:
             return
@@ -394,6 +410,7 @@ class ScaleCoordinator:
         slot = int(first.data[CONF_SLOT])
         sync_start = dt_util.now()
         connected = False
+        self._refused_later.discard(slot)
         try:
             async with async_open_session(
                 self.hass, self.address, self.model, device
@@ -418,7 +435,7 @@ class ScaleCoordinator:
                 self.async_process_readings(slot, result.readings, sync_start)
                 await self._async_drain(session, others, sync_start)
                 # The weigh-in is final once its slot is listed as pending.
-                await self._async_run_pending_deletions(session)
+                await self._async_run_pending_deletions(session, consented=True)
         except ScaleError as err:
             _LOGGER.warning("Syncing slot %s of %s failed: %r", slot, self.address, err)
             if isinstance(err, PairingUnsupported | PairingFailed):
@@ -444,7 +461,9 @@ class ScaleCoordinator:
                     slot, int(subentry.data[CONF_CONSENT_CODE])
                 )
             except ScaleError as err:
-                # The remaining slots stay pending and are synced at a later wake.
+                # The remaining slots stay pending and are synced at a later
+                # wake, this one first: a refusal here says nothing about its code.
+                self._refused_later.add(slot)
                 _LOGGER.debug(
                     "%s refused slot %s in the same connection: %r",
                     self.address,
@@ -507,7 +526,7 @@ class ScaleCoordinator:
                 users = await session.read_user_list()
                 if self.async_check_user_list(users):
                     await self.async_rebond(session)
-                await self._async_run_pending_deletions(session)
+                await self._async_run_pending_deletions(session, consented=False)
         except ScaleError as err:
             _LOGGER.warning(
                 "Checking the scale users of %s failed: %r", self.address, err
@@ -517,24 +536,50 @@ class ScaleCoordinator:
             if connected:
                 self.wakes.async_asleep()
 
-    async def _async_run_pending_deletions(self, session: ScaleSession) -> None:
+    async def _async_run_pending_deletions(
+        self, session: ScaleSession, *, consented: bool
+    ) -> None:
         """Consent as each removed scale user and delete it. Never raises
-        ScaleError: a failure keeps the remaining deletions for a later wake."""
+        ScaleError: a failure keeps the remaining deletions for a later wake.
+
+        `consented` says whether the session has consented before. Only a
+        refused first consent of a connection means a wrong code and drops the
+        deletion; a refused later one may just be the scale allowing one
+        consent per connection (design §8, V2), so the deletion waits to be
+        the first consent of a later connection.
+        """
         managed = self._scale_users()
-        for deletion in self.pending_deletions.all():
+        first = not consented
+        deletions = sorted(
+            self.pending_deletions.all(),
+            key=lambda d: d.slot not in self._refused_later,
+        )
+        for deletion in deletions:
             if deletion.slot in managed:
                 # The slot was adopted again: the scale user is wanted after all.
                 await self.pending_deletions.async_discard(deletion)
+                continue
+            if not first and deletion.slot in self._refused_later:
                 continue
             try:
                 await session.consent(deletion.slot, deletion.consent_code)
                 await session.delete_user()
             except ConsentRejected:
+                if not first:
+                    _LOGGER.debug(
+                        "%s refused deleting slot %s in the same connection",
+                        self.address,
+                        deletion.slot,
+                    )
+                    self._refused_later.add(deletion.slot)
+                    return
                 _LOGGER.debug(
                     "Dropping the deletion of slot %s on %s: consent rejected",
                     deletion.slot,
                     self.address,
                 )
+                first = False
+                self._refused_later.discard(deletion.slot)
                 await self.pending_deletions.async_discard(deletion)
                 continue
             except ScaleError as err:
@@ -546,4 +591,6 @@ class ScaleCoordinator:
                 )
                 return
             _LOGGER.debug("Deleted slot %s on %s", deletion.slot, self.address)
+            first = False
+            self._refused_later.discard(deletion.slot)
             await self.pending_deletions.async_discard(deletion)
