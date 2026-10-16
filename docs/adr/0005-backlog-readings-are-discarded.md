@@ -1,0 +1,5 @@
+# Readings not synced right after their weigh-in are discarded with a warning
+
+HA runs continuously and syncs during the wake window of every weigh-in, so a reading normally arrives seconds after it was taken, and the entity's state time is the weigh-in time. Readings that piled up while HA was down or out of range are still collected, because the scale keeps reporting a pending slot until its queue is empty. But they are discarded with a warning instead of being imported. We rejected back-filling (event entity per reading, imported long-term statistics) because HA cannot back-date entity states, and the extra machinery only serves an abnormal situation.
+
+A reading counts as a backlog reading when its timestamp is more than 5 minutes older than the start of the sync. HA sets the scale's clock at every sync, so the timestamp can be trusted. The exception is the first reading after a battery swap, which may be discarded wrongly; we accept that. Every sync that discards readings logs a warning and creates one persistent notification per scale user, naming the count and the time range.

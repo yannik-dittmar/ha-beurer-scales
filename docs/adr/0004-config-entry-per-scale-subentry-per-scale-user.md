@@ -1,0 +1,3 @@
+# One config entry per scale, one config subentry per scale user
+
+One sync serves every pending slot of a scale, so the scale owns the connection and is the config entry. Each scale user is a config subentry (HA ≥ 2025.3) with its own HA device, linked to the scale device with `via_device_id`. Removing a scale user's subentry removes its device and entities automatically. We rejected one config entry per person (the bodymiscale/Withings style) because those entries would have to share one connection behind the scenes. We rejected a slot table in the options because scale users would then get no devices of their own.

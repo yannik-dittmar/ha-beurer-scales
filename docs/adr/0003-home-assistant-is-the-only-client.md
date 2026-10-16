@@ -1,0 +1,3 @@
+# Home Assistant is the only client for the scale users it manages
+
+A scale user managed by HA must not also be used with the Beurer app (or any other client). Whichever client syncs first empties that scale user's queue, so readings would be split between the two. Duplicate scale users for the same person also make the scale guess (`U--`). And the app never shows its consent codes, so HA could not take over a scale user the app created. "Adopt an existing slot" therefore only exists for slots whose consent code the user knows, for example a slot HA itself created before a reinstall. The user documentation must state this restriction.
