@@ -263,6 +263,17 @@ class ScaleSession:
         readings = await self.collect_readings(quiet_period=quiet_period)
         return SyncResult(readings=readings, battery_percent=await self.read_battery())
 
+    async def drain(
+        self, slot: int, consent_code: int, *, quiet_period: float | None = None
+    ) -> list[Reading]:
+        """Consent another scale user after `sync` and collect its readings.
+
+        Whether the scale allows a second consent in one connection is unverified
+        (design §8, V2); a refusal raises ConsentRejected or ScaleConnectionError.
+        """
+        await self.consent(slot, consent_code)
+        return await self.collect_readings(quiet_period=quiet_period)
+
     async def subscribe_readings(self) -> None:
         """Subscribe to the measurement characteristics. Do this before consent:
         the scale pushes the stored readings right after it (§3)."""
