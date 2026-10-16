@@ -42,3 +42,12 @@ STORED_READING_SLOT_1_B = (
 
 # Offline weigh-in of slot 2: 78.2 kg at 2024-03-10 07:17:09 (§9.3).
 OFFLINE_WEIGHT_SLOT_2 = bytes.fromhex("02 18 3d e8 07 03 0a 07 11 09 02 f1 00 b4 00")
+
+# Delivered on consent after a weigh-in the display showed as `U--` -> `U-2`
+# (§9.3): custom1 byte 4 is 02, a guessed reading. 78.4 kg at 2024-03-10 07:15:11.
+GUESSED_READING_SLOT_2 = (
+    (0x2A9D, bytes.fromhex("02 40 3d e8 07 03 0a 07 0f 0b 02 f2 00 b4 00")),
+    (0x2A9C, bytes.fromhex("98 03 b9 00 c0 1c 9c 01 5d 02 cb 01 20 14")),
+    (0xFFF5, bytes.fromhex("0e 37 20 2b 02")),
+    (0xFFF6, bytes.fromhex("07 00 22 ec 31 30 0b ac 21 08 a1 00 9e 02 49 02")),
+)
