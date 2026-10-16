@@ -312,6 +312,21 @@ async def test_path_without_pairing_aborts(
     assert loaded_scale.subentries == {}
 
 
+async def test_failed_bond_aborts_like_a_path_without_pairing(
+    hass: HomeAssistant, loaded_scale: MockConfigEntry, fake_scale: FakeScale
+) -> None:
+    """A path that tries to bond and fails gets the same advice."""
+    fake_scale.add_user(slot=2, consent_code=4321)
+    fake_scale.pairing = "fails"
+    result = await start_adopt(hass, loaded_scale)
+
+    result = await submit_and_wake(hass, result["flow_id"], fake_scale, ADOPT_INPUT)
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "pairing_unsupported"
+    assert loaded_scale.subentries == {}
+
+
 async def test_silent_scale_aborts_and_disconnects(
     hass: HomeAssistant, loaded_scale: MockConfigEntry, fake_scale: FakeScale
 ) -> None:

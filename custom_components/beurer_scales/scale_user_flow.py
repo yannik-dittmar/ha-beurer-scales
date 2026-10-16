@@ -32,7 +32,12 @@ from .const import (
     slot_unique_id,
 )
 from .coordinator import async_hand_over_readings
-from .protocol.errors import ConsentRejected, PairingUnsupported, ScaleError
+from .protocol.errors import (
+    ConsentRejected,
+    PairingFailed,
+    PairingUnsupported,
+    ScaleError,
+)
 from .protocol.frames import UserListEntry
 from .protocol.models import ScaleModel, model_by_name
 from .protocol.readings import Reading
@@ -140,7 +145,7 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
             return self._progress_error({CONF_SLOT: "slot_not_found"})
         except ConsentRejected:
             return self._progress_error({CONF_CONSENT_CODE: "invalid_consent_code"})
-        except PairingUnsupported:
+        except (PairingUnsupported, PairingFailed):
             return self._progress_failed("pairing_unsupported")
         except ScaleError:
             return self._progress_failed("cannot_connect")

@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from .frames import FrameError, WeightFrame, decode_weight_frame
+from .frames import FrameError, WeightFrame, WeightUnit, decode_weight_frame
 from .models import WEIGHT_MEASUREMENT_UUID
 
 _LOGGER = logging.getLogger(__name__)
@@ -27,6 +27,8 @@ class Reading:
     # The reading's other frames by characteristic UUID (body composition,
     # custom frames), decoded by whoever needs them.
     frames: Mapping[str, bytes] = field(default_factory=dict)
+    # The unit the scale reported `weight_kg` in; only kg may be used as kg.
+    unit: WeightUnit = WeightUnit.KG
 
 
 @dataclass(slots=True)
@@ -66,6 +68,7 @@ class ReadingAssembler:
                 timestamp=group.weight.timestamp,
                 weight_kg=group.weight.weight_kg,
                 frames=dict(group.frames),
+                unit=group.weight.unit,
             )
             for group in self._groups
         ]

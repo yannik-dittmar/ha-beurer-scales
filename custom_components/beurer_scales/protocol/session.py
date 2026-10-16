@@ -21,6 +21,7 @@ from bleak_retry_connector import BleakClientWithServiceCache, establish_connect
 
 from .errors import (
     ConsentRejected,
+    PairingFailed,
     PairingUnsupported,
     ScaleConnectionError,
     ScaleTimeout,
@@ -55,6 +56,15 @@ CONNECT_ATTEMPTS = 2
 # reading arrive ~0.4 s apart, the first ~0.4 s after consent (§9.2, §9.4b).
 QUIET_PERIOD = 2.5
 _DISCONNECT_TIMEOUT = 5.0
+# Bleak has no typed pairing error; these appear in the messages of failed bonds:
+# BlueZ's Pair (org.bluez.Error.Authentication*) and habluetooth's kernel client.
+# Unverified on real hardware: extend this when a failure shows up unrecognised.
+# Matched case-insensitively, so keep them lower case.
+PAIRING_FAILURE_MARKERS = (
+    "org.bluez.error.authentication",
+    "pairing failed",
+    "pairing requires",
+)
 
 
 class GattClient(Protocol):
@@ -133,7 +143,10 @@ async def _connect(device: BLEDevice) -> GattClient:
         # bleak-esphome raises this for a proxy without pairing support.
         raise PairingUnsupported(str(err)) from err
     except BleakError as err:
-        raise ScaleConnectionError(str(err)) from err
+        message = str(err)
+        if any(marker in message.lower() for marker in PAIRING_FAILURE_MARKERS):
+            raise PairingFailed(message) from err
+        raise ScaleConnectionError(message) from err
     return client
 
 
