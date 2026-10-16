@@ -5,6 +5,8 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
 
+from bleak.backends.device import BLEDevice
+
 from homeassistant.components.bluetooth import (
     BluetoothServiceInfoBleak,
     async_ble_device_from_address,
@@ -57,10 +59,18 @@ async def async_wait_for_wake(
 
 @asynccontextmanager
 async def async_open_session(
-    hass: HomeAssistant, address: str, model: ScaleModel
+    hass: HomeAssistant,
+    address: str,
+    model: ScaleModel,
+    device: BLEDevice | None = None,
 ) -> AsyncIterator[ScaleSession]:
-    """Connect to an awake scale through any connectable path; always disconnect."""
-    device = async_ble_device_from_address(hass, address, connectable=True)
+    """Connect to an awake scale through any connectable path; always disconnect.
+
+    Pass `device` from a connectable advertisement that is being handled right
+    now: HA hasn't recorded it yet.
+    """
+    if device is None:
+        device = async_ble_device_from_address(hass, address, connectable=True)
     if device is None:
         raise ScaleConnectionError(f"no connectable Bluetooth path to {address}")
     async with open_session(device, model) as session:

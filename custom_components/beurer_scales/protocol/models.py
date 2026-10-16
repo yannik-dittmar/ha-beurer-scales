@@ -6,6 +6,7 @@ from dataclasses import dataclass
 # The BF450 advertises the Weight Scale service (0x181D) byte-swapped, as 0x1D18;
 # its service data holds the pending-slot list (protocol doc §2).
 SWAPPED_WEIGHT_SCALE_UUID = "00001d18-0000-1000-8000-00805f9b34fb"
+WEIGHT_SCALE_SERVICE_UUID = "0000181d-0000-1000-8000-00805f9b34fb"
 
 
 def uuid16(short: int) -> str:
@@ -21,6 +22,10 @@ DATE_OF_BIRTH_UUID = uuid16(0x2A85)
 GENDER_UUID = uuid16(0x2A8C)
 HEIGHT_UUID = uuid16(0x2A8E)
 DATABASE_CHANGE_INCREMENT_UUID = uuid16(0x2A99)
+BATTERY_LEVEL_UUID = uuid16(0x2A19)
+# Starts every reading (§9.4b).
+WEIGHT_MEASUREMENT_UUID = uuid16(0x2A9D)
+BODY_COMPOSITION_UUID = uuid16(0x2A9C)
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +40,11 @@ class ScaleModel:
     activity_level_uuid: str
     # Verified on real hardware; other models get an "untested" warning.
     verified: bool = False
+    # The characteristics a reading arrives on, in the order the scale sends them;
+    # the first is always the weight (§5).
+    reading_uuids: tuple[str, ...] = (WEIGHT_MEASUREMENT_UUID, BODY_COMPOSITION_UUID)
+    # Notifies 01 when a live reading has finished (§9.4), or None.
+    live_reading_done_uuid: str | None = None
 
 
 BF450 = ScaleModel(
@@ -43,6 +53,13 @@ BF450 = ScaleModel(
     user_list_uuid=uuid16(0xFFF1),
     activity_level_uuid=uuid16(0xFFF2),
     verified=True,
+    reading_uuids=(
+        WEIGHT_MEASUREMENT_UUID,
+        BODY_COMPOSITION_UUID,
+        uuid16(0xFFF5),  # custom1
+        uuid16(0xFFF6),  # custom2
+    ),
+    live_reading_done_uuid=uuid16(0xFFF4),
 )
 MODELS: tuple[ScaleModel, ...] = (BF450,)
 

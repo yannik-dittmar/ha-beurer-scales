@@ -9,9 +9,10 @@ The fake keeps its own GATT map and frame encoders, taken from the captures in
 §9, so it is an independent source of truth for the code under test.
 
 Implemented so far: waking and sleeping, the required bond, setting the time,
-the user list, consent, registering and deleting scale users, profile writes,
-and injected write failures. Extend it as later behaviour needs it (stored and
-live readings, factory reset, pending-slot adverts).
+the user list, consent, stored and live readings, the pending-slot list in the
+advertisement, the battery level, registering and deleting scale users, profile
+writes, and injected write failures. Extend it as later behaviour needs it
+(factory reset).
 """
 
 import asyncio
@@ -44,6 +45,8 @@ PROFILE_CHARACTERISTICS = (
     DATABASE_CHANGE_INCREMENT,
     ACTIVITY_LEVEL,
 )
+BATTERY_LEVEL = _uuid(0x2A19)
+TAKE_MEASUREMENT = _uuid(0xFFF4)
 
 SWAPPED_WEIGHT_SCALE_UUID = _uuid(0x1D18)
 SLOT_COUNT = 8
@@ -64,6 +67,8 @@ class FakeScaleUser:
     gender: Literal["male", "female"] = "male"
     activity_level: int = 3
     database_change_increment: int = 0
+    # Readings not yet delivered, oldest first; they make the slot pending.
+    stored_readings: list["FakeReading"] = field(default_factory=list)
 
     def user_list_entry(self, slot: int) -> bytes:
         """Encode this scale user as the BF450 lists it (§9.2: no initials)."""
@@ -108,6 +113,7 @@ class FakeScale:
     connection_attempts: int = 0
     # Every User Control Point request written to the scale.
     ucp_requests: list[bytes] = field(default_factory=list)
+    battery_level: int = 71
     client: "FakeBleakClient | None" = None
     # Writes to these characteristics misbehave.
     write_failures: dict[str, WriteFailure] = field(default_factory=dict)
@@ -137,8 +143,23 @@ class FakeScale:
         return BLEDevice(self.address, self.local_name, {})
 
     def service_data(self) -> dict[str, bytes]:
-        """Advertisement service data: the pending-slot list (none yet)."""
-        return {SWAPPED_WEIGHT_SCALE_UUID: b""}
+        """Advertisement service data: the slots with undelivered readings (§2)."""
+        pending = [slot for slot, u in sorted(self.users.items()) if u.stored_readings]
+        return {SWAPPED_WEIGHT_SCALE_UUID: bytes(pending)}
+
+    def weigh_in(self, slot: int, reading: "FakeReading") -> None:
+        """Someone the scale recognises as `slot` weighs in.
+
+        While that scale user is consented the reading is pushed live, followed
+        by FFF4 `01` (§9.4); otherwise the scale stores it and lists the slot as
+        pending.
+        """
+        reading = reading.for_slot(slot)
+        if self.client is not None and self.client.consented_slot == slot:
+            self.client.send_reading(reading)
+            self.client.notify(TAKE_MEASUREMENT, b"\x01")
+        else:
+            self.users[slot].stored_readings.append(reading)
 
     async def establish_connection(
         self,
@@ -175,6 +196,14 @@ class FakeBleakClient:
     def is_connected(self) -> bool:
         """Whether the link is up."""
         return self._connected
+
+    async def read_gatt_char(self, char_specifier: str, **kwargs: Any) -> bytearray:
+        """Read a characteristic."""
+        self._check_link()
+        uuid = str(char_specifier).lower()
+        if uuid == BATTERY_LEVEL:
+            return bytearray([self._scale.battery_level])
+        raise BleakError(f"Read of unsupported characteristic {uuid}")
 
     def _check_link(self) -> None:
         if not self._bonded:
@@ -217,6 +246,15 @@ class FakeBleakClient:
         self._scale.awake = False
         return True
 
+    def send_reading(self, reading: "FakeReading") -> None:
+        """Push a reading's frames, 2A9D first (§9.2 step 8)."""
+        for short_uuid, frame in reading.frames:
+            self._notify(_uuid(short_uuid), frame)
+
+    def notify(self, uuid: str, frame: bytes) -> None:
+        """Send a notification on a subscribed characteristic."""
+        self._notify(uuid, frame)
+
     def _notify(self, uuid: str, frame: bytes) -> None:
         if callback := self._subscriptions.get(uuid):
             asyncio.get_running_loop().call_soon(
@@ -243,6 +281,11 @@ class FakeBleakClient:
             if user is not None and user.consent_code == code:
                 self.consented_slot = slot
                 self._notify(USER_CONTROL_POINT, b"\x20\x02\x01")
+                # Stored readings follow the consent, oldest first (§9.4b),
+                # and the slot is no longer pending.
+                for reading in user.stored_readings:
+                    self.send_reading(reading)
+                user.stored_readings.clear()
             else:
                 # A wrong code and a missing slot look the same (§9.4b).
                 self._notify(USER_CONTROL_POINT, b"\x20\x02\x04")
@@ -301,3 +344,46 @@ class FakeBleakClient:
                 await asyncio.get_running_loop().create_future()
             finally:
                 self._scale.stalled = False
+
+
+@dataclass(frozen=True)
+class FakeReading:
+    """A reading as the scale sends it: frames keyed by short characteristic UUID."""
+
+    frames: tuple[tuple[int, bytes], ...]
+
+    @classmethod
+    def from_capture(
+        cls, capture: tuple[tuple[int, bytes], ...], *, at: datetime | None = None
+    ) -> "FakeReading":
+        """A captured reading (tests/frames.py), optionally taken at another time."""
+        reading = cls(capture)
+        return reading if at is None else reading._with_weight(timestamp=at)
+
+    def for_slot(self, slot: int) -> "FakeReading":
+        """The same reading, assigned to `slot`."""
+        return self._with_weight(slot=slot)
+
+    def _with_weight(
+        self, *, timestamp: datetime | None = None, slot: int | None = None
+    ) -> "FakeReading":
+        frames = []
+        for short_uuid, frame in self.frames:
+            if short_uuid == 0x2A9D:
+                weight = bytearray(frame)
+                if timestamp is not None:
+                    weight[3:10] = bytes(
+                        [
+                            *timestamp.year.to_bytes(2, "little"),
+                            timestamp.month,
+                            timestamp.day,
+                            timestamp.hour,
+                            timestamp.minute,
+                            timestamp.second,
+                        ]
+                    )
+                if slot is not None:
+                    weight[10] = slot
+                frame = bytes(weight)
+            frames.append((short_uuid, frame))
+        return FakeReading(tuple(frames))

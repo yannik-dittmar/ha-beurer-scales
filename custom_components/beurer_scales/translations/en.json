@@ -91,6 +91,16 @@
       }
     }
   },
+  "entity": {
+    "sensor": {
+      "last_sync": {
+        "name": "Last sync"
+      },
+      "last_reading": {
+        "name": "Last reading"
+      }
+    }
+  },
   "selector": {
     "gender": {
       "options": {

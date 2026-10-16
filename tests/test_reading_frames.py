@@ -1,0 +1,51 @@
+"""Decoding the pending-slot list and readings, on frames captured from a BF450."""
+
+from datetime import datetime
+
+import pytest
+
+from custom_components.beurer_scales.protocol.frames import (
+    FrameError,
+    decode_pending_slots,
+    decode_weight_frame,
+)
+
+from . import frames
+
+
+@pytest.mark.parametrize(
+    ("payload", "slots"),
+    [(b"", ()), (b"\x01", (1,)), (b"\x01\x02", (1, 2))],
+    ids=["none", "one", "several"],
+)
+def test_pending_slot_list(payload: bytes, slots: tuple[int, ...]) -> None:
+    """The 0x1D18 service data is one byte per pending slot (§2)."""
+    assert decode_pending_slots(payload) == slots
+
+
+def test_weight_frame() -> None:
+    """2A9D holds the weight, the scale's local timestamp and the slot (§9.3)."""
+    weight = decode_weight_frame(dict(frames.READING_SLOT_2)[0x2A9D])
+
+    assert weight.weight_kg == 78.4
+    assert weight.timestamp == datetime(2024, 3, 10, 7, 12, 30)
+    assert weight.slot == 2
+    assert weight.bmi == 24.2
+    assert weight.height_cm == 180
+
+
+def test_offline_weight_frame() -> None:
+    """Another captured weight decodes with the 0.005 kg resolution."""
+    weight = decode_weight_frame(frames.OFFLINE_WEIGHT_SLOT_2)
+
+    assert weight.weight_kg == 78.2
+    assert weight.timestamp == datetime(2024, 3, 10, 7, 17, 9)
+
+
+@pytest.mark.parametrize(
+    "frame", [b"", frames.OFFLINE_WEIGHT_SLOT_2[:-1]], ids=["empty", "short"]
+)
+def test_malformed_weight_frames_are_rejected(frame: bytes) -> None:
+    """A weight frame that isn't 15 bytes raises FrameError (§9.4)."""
+    with pytest.raises(FrameError):
+        decode_weight_frame(frame)

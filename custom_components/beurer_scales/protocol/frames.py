@@ -4,7 +4,7 @@ All multi-byte integers are little-endian.
 """
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from enum import Enum, IntEnum, StrEnum
 
 
@@ -124,3 +124,46 @@ def decode_ucp_response(frame: bytes) -> UcpResponse:
         else None
     )
     return UcpResponse(request=request, result=result, slot=slot)
+
+
+# --- Advertisements and readings (protocol doc §2, §5) ---
+
+
+def decode_pending_slots(payload: bytes) -> tuple[int, ...]:
+    """Decode the 0x1D18 service data: one byte per slot with unsynced readings."""
+    return tuple(payload)
+
+
+@dataclass(frozen=True, slots=True)
+class WeightFrame:
+    """A Weight Measurement (0x2A9D) frame. It always starts a new reading."""
+
+    weight_kg: float
+    # The scale's local time; it has no time zone.
+    timestamp: datetime | None
+    slot: int
+    bmi: float
+    height_cm: int
+
+
+_WEIGHT_FRAME_LENGTH = 15
+
+
+def decode_weight_frame(frame: bytes) -> WeightFrame:
+    """Decode 0x2A9D. The flags byte is ignored, as the app does (§5.1, §9.4)."""
+    if len(frame) != _WEIGHT_FRAME_LENGTH:
+        raise FrameError(f"weight frame of {len(frame)} bytes: {frame.hex()}")
+    try:
+        timestamp: datetime | None = datetime(
+            int.from_bytes(frame[3:5], "little"), *frame[5:10]
+        )
+    except ValueError:
+        timestamp = None
+    return WeightFrame(
+        weight_kg=round(int.from_bytes(frame[1:3], "little") * 0.005, 3),
+        timestamp=timestamp,
+        slot=frame[10],
+        bmi=round(int.from_bytes(frame[11:13], "little") * 0.1, 1),
+        # Raw cm on the BF450 (§9.3).
+        height_cm=int.from_bytes(frame[13:15], "little"),
+    )
