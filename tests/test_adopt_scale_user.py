@@ -20,8 +20,9 @@ from pytest_homeassistant_custom_component.common import (
 
 from custom_components.beurer_scales.const import SUBENTRY_SCALE_USER
 
+from . import frames
 from .conftest import SCALE_ADDRESS, scale_advertisement, wake_scale
-from .fake_scale import FakeScale
+from .fake_scale import FakeReading, FakeScale
 
 ADOPT_INPUT = {"name": "Anna", "slot": 2, "consent_code": 4321}
 
@@ -370,3 +371,29 @@ async def test_aborting_while_waiting_never_connects(
     await wake_scale(hass, fake_scale)
 
     assert fake_scale.connection_attempts == 0
+
+
+# --- Readings delivered on consent ---
+
+
+async def test_readings_delivered_on_consent_reach_the_new_scale_user(
+    hass: HomeAssistant, loaded_scale: MockConfigEntry, fake_scale: FakeScale
+) -> None:
+    """Adopting consents, so the scale hands over the slot's readings: the new
+    scale user's sensors show them instead of losing them."""
+    taken = dt_util.now().replace(tzinfo=None, microsecond=0)
+    fake_scale.add_user(slot=2, consent_code=4321)
+    fake_scale.weigh_in(2, FakeReading.from_capture(frames.READING_SLOT_2, at=taken))
+    result = await start_adopt(hass, loaded_scale)
+
+    result = await submit_and_wake(hass, result["flow_id"], fake_scale, ADOPT_INPUT)
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    weight = er.async_get(hass).async_get_entity_id(
+        "sensor", "beurer_scales", f"{SCALE_ADDRESS}_slot_2_weight"
+    )
+    assert weight is not None
+    state = hass.states.get(weight)
+    assert state is not None
+    assert state.state == "78.4"

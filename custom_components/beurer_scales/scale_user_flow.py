@@ -31,9 +31,11 @@ from .const import (
     PROFILE_HEIGHT_CM,
     slot_unique_id,
 )
+from .coordinator import async_hand_over_readings
 from .protocol.errors import ConsentRejected, PairingUnsupported, ScaleError
 from .protocol.frames import UserListEntry
 from .protocol.models import ScaleModel, model_by_name
+from .protocol.readings import Reading
 
 
 class SlotNotFound(ScaleError):
@@ -65,6 +67,8 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
         self._abort_reason = ""
         self._task: asyncio.Task[UserListEntry] | None = None
         self._profile: UserListEntry | None = None
+        # Readings the scale delivered when the flow consented.
+        self._readings: list[Reading] = []
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -147,6 +151,11 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
     ) -> SubentryFlowResult:
         """Create the scale user subentry."""
         assert self._profile is not None
+        # The scale clears the slot's pending flag once it delivered them, so
+        # they would be lost; the sync pipeline takes them at the next setup.
+        async_hand_over_readings(
+            self.hass, self._get_entry().entry_id, self._profile.slot, self._readings
+        )
         return self.async_create_entry(
             title=self._name,
             unique_id=slot_unique_id(self._profile.slot),
@@ -210,5 +219,8 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
             profile = next((u for u in users if u.slot == slot), None)
             if profile is None:
                 raise SlotNotFound(f"slot {slot}")
+            # Consent releases the slot's stored readings (§3).
+            await session.subscribe_readings()
             await session.consent(slot, int(self._input[CONF_CONSENT_CODE]))
+            self._readings = await session.collect_readings()
         return profile
