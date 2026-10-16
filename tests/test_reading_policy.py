@@ -25,7 +25,9 @@ def reading(
 ) -> Reading:
     """Assemble a captured reading as the session would return it."""
     assembler = ReadingAssembler()
-    for short_uuid, frame in FakeReading.from_capture(capture, at=at).for_slot(slot).frames:
+    for short_uuid, frame in (
+        FakeReading.from_capture(capture, at=at).for_slot(slot).frames
+    ):
         assembler.add(f"0000{short_uuid:04x}-0000-1000-8000-00805f9b34fb", frame)
     (result,) = assembler.readings()
     return result
@@ -49,9 +51,7 @@ def test_a_reading_more_than_5_minutes_old_is_backlog() -> None:
     result = ReadingPolicy().apply([old, borderline], SYNC_START)
 
     assert result.fresh == [borderline]
-    assert [(d.reading, d.reason) for d in result.discarded] == [
-        (old, Discard.BACKLOG)
-    ]
+    assert [(d.reading, d.reason) for d in result.discarded] == [(old, Discard.BACKLOG)]
 
 
 def test_a_reading_the_scale_guessed_is_discarded() -> None:

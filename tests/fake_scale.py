@@ -126,7 +126,11 @@ class FakeScale:
         pending.
         """
         reading = reading.for_slot(slot)
-        if self.client is not None and self.client.consented_slot == slot:
+        if (
+            self.client is not None
+            and self.connected
+            and self.client.consented_slot == slot
+        ):
             self.client.send_reading(reading)
             self.client.notify(TAKE_MEASUREMENT, b"\x01")
         else:
