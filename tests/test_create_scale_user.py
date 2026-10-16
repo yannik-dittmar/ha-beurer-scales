@@ -15,8 +15,9 @@ from pytest_homeassistant_custom_component.common import (
     async_fire_time_changed,
 )
 
-from .conftest import SCALE_ADDRESS, scale_advertisement, wake_scale
-from .fake_scale import ACTIVITY_LEVEL, FakeScale
+from . import frames
+from .conftest import SCALE_ADDRESS, scale_advertisement
+from .fake_scale import ACTIVITY_LEVEL, FakeReading, FakeScale
 from .test_adopt_scale_user import only_subentry, start_flow
 
 CREATE_INPUT = {
@@ -36,6 +37,21 @@ async def start_create(hass: HomeAssistant, entry: MockConfigEntry) -> dict[str,
     )
 
 
+async def after_progress(
+    hass: HomeAssistant, flow_id: str, step_id: str
+) -> dict[str, Any]:
+    """Let the scale and HA run until the progress step `step_id` is done.
+
+    Creating holds the connection for teaching in a background task, which
+    `async_block_till_done` can't wait for. Returns the flow's next result.
+    """
+    for _ in range(2000):
+        if hass.config_entries.subentries.async_get(flow_id)["step_id"] != step_id:
+            return await hass.config_entries.subentries.async_configure(flow_id)
+        await asyncio.sleep(0.001)
+    raise AssertionError(f"the flow is still at {step_id}")
+
+
 async def submit_and_wake(
     hass: HomeAssistant, flow_id: str, scale: FakeScale, user_input: dict[str, Any]
 ) -> dict[str, Any]:
@@ -43,8 +59,40 @@ async def submit_and_wake(
     result = await hass.config_entries.subentries.async_configure(flow_id, user_input)
     assert result["type"] is FlowResultType.SHOW_PROGRESS
     assert result["progress_action"] == "create"
-    await wake_scale(hass, scale)
-    return await hass.config_entries.subentries.async_configure(flow_id)
+    scale.wake()
+    async_get_advertisement_callback(hass)(
+        scale_advertisement(service_data=scale.service_data())
+    )
+    return await after_progress(hass, flow_id, "create_wake")
+
+
+def teaching_reading() -> FakeReading:
+    """A live reading taken now, on the scale's clock."""
+    now = dt_util.now().replace(tzinfo=None, microsecond=0)
+    return FakeReading.from_capture(frames.READING_SLOT_2, at=now)
+
+
+async def step_off_and_on(
+    hass: HomeAssistant, flow_id: str, scale: FakeScale, slot: int
+) -> dict[str, Any]:
+    """Weigh in during teaching; return the flow's next result."""
+    scale.weigh_in(slot, teaching_reading())
+    return await after_progress(hass, flow_id, "teach")
+
+
+async def create_with_one_reading(
+    hass: HomeAssistant, flow_id: str, scale: FakeScale, user_input: dict[str, Any]
+) -> dict[str, Any]:
+    """Create a scale user, teach it once and finish."""
+    result = await submit_and_wake(hass, flow_id, scale, user_input)
+    assert result["step_id"] == "teach", result
+    assert scale.client is not None
+    assert scale.client.consented_slot is not None
+    result = await step_off_and_on(hass, flow_id, scale, scale.client.consented_slot)
+    assert result["step_id"] == "teach_more", result
+    return await hass.config_entries.subentries.async_configure(
+        flow_id, {"next_step_id": "teach_done"}
+    )
 
 
 async def test_create_registers_the_scale_user_and_writes_its_profile(
@@ -56,7 +104,9 @@ async def test_create_registers_the_scale_user_and_writes_its_profile(
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "create"
 
-    result = await submit_and_wake(hass, result["flow_id"], fake_scale, CREATE_INPUT)
+    result = await create_with_one_reading(
+        hass, result["flow_id"], fake_scale, CREATE_INPUT
+    )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     subentry = only_subentry(loaded_scale)
@@ -97,7 +147,7 @@ async def test_new_scale_user_device_is_linked_to_the_scale(
 ) -> None:
     """The created scale user gets its own device, connected via the scale device."""
     result = await start_create(hass, loaded_scale)
-    await submit_and_wake(hass, result["flow_id"], fake_scale, CREATE_INPUT)
+    await create_with_one_reading(hass, result["flow_id"], fake_scale, CREATE_INPUT)
     await hass.async_block_till_done()
 
     [scale_device] = device_registry.async_get_devices(
@@ -191,8 +241,7 @@ async def test_scale_that_does_not_wake_aborts(
     )
 
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=3, seconds=1))
-    await hass.async_block_till_done()
-    result = await hass.config_entries.subentries.async_configure(result["flow_id"])
+    result = await after_progress(hass, result["flow_id"], "create_wake")
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "wake_timeout"

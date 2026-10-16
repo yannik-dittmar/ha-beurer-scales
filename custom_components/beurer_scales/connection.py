@@ -63,15 +63,17 @@ async def async_open_session(
     address: str,
     model: ScaleModel,
     device: BLEDevice | None = None,
+    session_timeout: float | None = None,
 ) -> AsyncIterator[ScaleSession]:
     """Connect to an awake scale through any connectable path; always disconnect.
 
     Pass `device` from a connectable advertisement that is being handled right
-    now: HA hasn't recorded it yet.
+    now: HA hasn't recorded it yet. `session_timeout` replaces the default budget
+    that fits the wake window, for sessions that keep the scale awake (teaching).
     """
     if device is None:
         device = async_ble_device_from_address(hass, address, connectable=True)
     if device is None:
         raise ScaleConnectionError(f"no connectable Bluetooth path to {address}")
-    async with open_session(device, model) as session:
+    async with open_session(device, model, session_timeout=session_timeout) as session:
         yield session
