@@ -21,5 +21,54 @@
       "no_devices_found": "No unconfigured Beurer scale has been seen nearby. Step on the scale to wake it, then try again.",
       "not_supported": "This scale model isn't supported."
     }
+  },
+  "config_subentries": {
+    "scale_user": {
+      "initiate_flow": {
+        "user": "Add scale user"
+      },
+      "entry_type": "Scale user",
+      "step": {
+        "user": {
+          "title": "Add scale user",
+          "menu_options": {
+            "create": "Create new scale user",
+            "adopt": "Adopt existing slot"
+          }
+        },
+        "adopt": {
+          "title": "Adopt existing slot",
+          "description": "Use a slot whose consent code you know, for example one Home Assistant created before a reinstall. Don't adopt a scale user that the Beurer app also uses: Home Assistant must be its only client.",
+          "data": {
+            "person": "Person",
+            "name": "Name",
+            "slot": "Slot",
+            "consent_code": "Consent code"
+          },
+          "data_description": {
+            "person": "Optional. Links the scale user to a Home Assistant person.",
+            "name": "Leave empty to use the person's name.",
+            "slot": "The slot number on the scale.",
+            "consent_code": "The 4-digit code chosen when this scale user was created."
+          }
+        }
+      },
+      "progress": {
+        "wake": "Step on the scale to wake it. Home Assistant then connects, checks the consent code and reads the profile from the scale."
+      },
+      "error": {
+        "name_required": "Choose a person or enter a name.",
+        "name_in_use": "Another scale user of this scale already has this name.",
+        "slot_in_use": "This slot already is a scale user of this scale.",
+        "slot_not_found": "The scale has no scale user in this slot.",
+        "invalid_consent_code": "The scale rejected this consent code."
+      },
+      "abort": {
+        "create_not_available": "Creating a new scale user isn't available yet. Use \"Adopt existing slot\" instead.",
+        "wake_timeout": "The scale didn't wake up within 3 minutes. Start again and step on the scale.",
+        "pairing_unsupported": "The Bluetooth adapter or proxy that reached the scale can't pair with it. Use an ESPHome Bluetooth proxy, or make the host adapter pairable.",
+        "cannot_connect": "Home Assistant couldn't talk to the scale. Make sure it is in range, then try again."
+      }
+    }
   }
 }

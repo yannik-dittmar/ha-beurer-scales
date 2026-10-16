@@ -77,10 +77,14 @@ async def open_session(
     device: BLEDevice,
     model: ScaleModel,
     *,
-    session_timeout: float = SESSION_TIMEOUT,
-    response_timeout: float = RESPONSE_TIMEOUT,
+    session_timeout: float | None = None,
+    response_timeout: float | None = None,
 ) -> AsyncIterator["ScaleSession"]:
     """Connect with bonding and yield a session; always disconnect afterwards."""
+    if session_timeout is None:
+        session_timeout = SESSION_TIMEOUT
+    if response_timeout is None:
+        response_timeout = RESPONSE_TIMEOUT
     try:
         async with asyncio.timeout(session_timeout):
             client = await _connect(device)

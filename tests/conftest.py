@@ -1,6 +1,8 @@
 """Shared fixtures for Beurer Scales tests."""
 
 import time
+from collections.abc import Iterator
+from unittest.mock import patch
 
 import pytest
 from bleak.backends.device import BLEDevice
@@ -20,6 +22,8 @@ from custom_components.beurer_scales.const import CONF_MODEL, DOMAIN
 from custom_components.beurer_scales.protocol.models import (
     SWAPPED_WEIGHT_SCALE_UUID as SWAPPED_WEIGHT_SCALE_UUID,
 )
+
+from .fake_scale import FakeScale
 
 SCALE_ADDRESS = "AA:BB:CC:DD:EE:01"
 WEIGHT_SCALE_UUID = "0000181d-0000-1000-8000-00805f9b34fb"
@@ -98,3 +102,37 @@ async def inject_advertisement(
     async_get_advertisement_callback(hass)(info)
     # Discovery flows start as background tasks.
     await hass.async_block_till_done(wait_background_tasks=True)
+
+
+@pytest.fixture
+def fake_scale() -> Iterator[FakeScale]:
+    """A sleeping BF450 behind the Bluetooth boundary; HA connects to it."""
+    scale = FakeScale(address=SCALE_ADDRESS)
+    with patch(
+        "custom_components.beurer_scales.protocol.session.establish_connection",
+        scale.establish_connection,
+    ):
+        yield scale
+
+
+@pytest.fixture
+async def loaded_scale(
+    hass: HomeAssistant, configured_scale: MockConfigEntry
+) -> MockConfigEntry:
+    """A BF450 that is set up and loaded."""
+    assert await hass.config_entries.async_setup(configured_scale.entry_id)
+    await hass.async_block_till_done()
+    return configured_scale
+
+
+async def wake_scale(hass: HomeAssistant, scale: FakeScale) -> None:
+    """Step on the fake scale: it wakes up and advertises."""
+    scale.wake()
+    await inject_advertisement(
+        hass,
+        scale_advertisement(
+            address=scale.address,
+            local_name=scale.local_name,
+            service_data=scale.service_data(),
+        ),
+    )

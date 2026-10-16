@@ -7,11 +7,18 @@ from homeassistant.components.bluetooth import (
     BluetoothServiceInfoBleak,
     async_discovered_service_info,
 )
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    ConfigSubentryFlow,
+)
 from homeassistant.const import CONF_ADDRESS
+from homeassistant.core import callback
 
-from .const import CONF_MODEL, DOMAIN, MANUFACTURER
+from .const import CONF_MODEL, DOMAIN, MANUFACTURER, SUBENTRY_SCALE_USER
 from .protocol.models import ScaleModel, model_from_advertisement
+from .scale_user_flow import ScaleUserSubentryFlow
 
 
 def _display_name(model: ScaleModel) -> str:
@@ -22,6 +29,14 @@ class BeurerScalesConfigFlow(ConfigFlow, domain=DOMAIN):
     """Add one Beurer scale. Adding a scale never connects to it."""
 
     VERSION = 1
+
+    @classmethod
+    @callback
+    def async_get_supported_subentry_types(
+        cls, config_entry: ConfigEntry
+    ) -> dict[str, type[ConfigSubentryFlow]]:
+        """Scale users are subentries of their scale (ADR 0004)."""
+        return {SUBENTRY_SCALE_USER: ScaleUserSubentryFlow}
 
     def __init__(self) -> None:
         """Initialize the flow."""

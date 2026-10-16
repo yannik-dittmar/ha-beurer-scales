@@ -4,3 +4,24 @@ DOMAIN = "beurer_scales"
 MANUFACTURER = "Beurer"
 
 CONF_MODEL = "model"
+
+# A config subentry per scale user (ADR 0004).
+SUBENTRY_SCALE_USER = "scale_user"
+
+# Scale user subentry data.
+CONF_SLOT = "slot"
+CONF_CONSENT_CODE = "consent_code"
+CONF_NAME = "name"
+# The linked person's entity registry id, or None.
+CONF_PERSON = "person"
+CONF_PROFILE = "profile"
+# Keys of CONF_PROFILE.
+PROFILE_BIRTH_DATE = "birth_date"  # ISO date
+PROFILE_HEIGHT_CM = "height_cm"
+PROFILE_GENDER = "gender"  # "male" / "female"
+PROFILE_ACTIVITY_LEVEL = "activity_level"  # 1-5
+
+
+def slot_unique_id(slot: int) -> str:
+    """Return the unique id of the scale user subentry for a slot."""
+    return f"slot_{slot}"

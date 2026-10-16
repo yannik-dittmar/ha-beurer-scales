@@ -83,6 +83,8 @@ class FakeScale:
     # The last time HA set, as the scale decoded it.
     clock: datetime | None = None
     connection_attempts: int = 0
+    # Every User Control Point request written to the scale.
+    ucp_requests: list[bytes] = field(default_factory=list)
     client: "FakeBleakClient | None" = None
 
     def add_user(self, slot: int, consent_code: int, **profile: Any) -> FakeScaleUser:
@@ -196,6 +198,7 @@ class FakeBleakClient:
         self._notify(USER_LIST, b"\x01" if users else b"\x02")
 
     def _handle_ucp(self, request: bytes) -> None:
+        self._scale.ucp_requests.append(request)
         if not self._scale.answers_ucp:
             return
         opcode = request[0]
