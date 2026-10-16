@@ -133,4 +133,3 @@ async def test_a_timeout_after_a_reading_keeps_what_was_taught(
     assert len(teaching.readings) == 1
     assert teaching.timed_out
     assert teaching.ended
-

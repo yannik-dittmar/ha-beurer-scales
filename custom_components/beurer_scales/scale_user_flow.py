@@ -1,12 +1,19 @@
 """The "Add scale user" subentry flow: create a new scale user or adopt a slot."""
 
 import asyncio
-from datetime import date
+from collections.abc import Awaitable, Callable, Mapping
+from datetime import date, datetime
+from types import MappingProxyType
 from typing import Any
 
 import probatio
-from homeassistant.config_entries import ConfigSubentryFlow, SubentryFlowResult
+from homeassistant.config_entries import (
+    ConfigSubentry,
+    ConfigSubentryFlow,
+    SubentryFlowResult,
+)
 from homeassistant.const import CONF_ADDRESS
+from homeassistant.core import callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.selector import (
     DateSelector,
@@ -34,20 +41,25 @@ from .const import (
     PROFILE_BIRTH_DATE,
     PROFILE_GENDER,
     PROFILE_HEIGHT_CM,
+    SUBENTRY_SCALE_USER,
     slot_unique_id,
 )
 from .coordinator import async_hand_over_readings
+from .protocol import session as protocol_session
+from .protocol import teaching as protocol_teaching
 from .protocol.errors import (
     ConsentRejected,
     NoFreeSlot,
     PairingUnsupported,
     ScaleError,
+    TeachingTimeout,
 )
 from .protocol.frames import Gender, UserListEntry
 from .protocol.models import ScaleModel, model_by_name
 from .protocol.profile import Profile
 from .protocol.readings import Reading
 from .protocol.scale_user import CreatedScaleUser, create_scale_user
+from .protocol.teaching import TEACHING_READINGS, Teaching
 
 # Beurer's supported ranges for body-composition scales.
 MIN_HEIGHT_CM = 100
@@ -87,8 +99,16 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
         self._profile: UserListEntry | None = None
         # The create path.
         self._new_profile: Profile | None = None
+        # Holds the connection from the wake through teaching.
         self._create_task: asyncio.Task[CreatedScaleUser] | None = None
         self._created: CreatedScaleUser | None = None
+        self._created_event = asyncio.Event()
+        self._teaching = Teaching()
+        # When the create task connected, for the backlog rule.
+        self._sync_start: datetime | None = None
+        # What the progress step shown right now waits for.
+        self._milestone: asyncio.Task[None] | None = None
+        self._entry_created = False
         # Readings the scale delivered when the flow consented.
         self._readings: list[Reading] = []
 
@@ -154,40 +174,101 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
     ) -> SubentryFlowResult:
         """Wait for the wake, then create the scale user on the scale."""
         if self._create_task is None:
-            self._create_task = self.hass.async_create_task(self._async_create())
-        if not self._create_task.done():
-            return self.async_show_progress(
-                step_id="create_wake",
-                progress_action="create",
-                progress_task=self._create_task,
+            # A background task: it outlives the progress steps and the menu.
+            self._create_task = self._get_entry().async_create_background_task(
+                self.hass, self._async_create(), "beurer_scales create scale user"
             )
+        if result := self._progress_until(
+            "create_wake", "create", self._created_event.wait
+        ):
+            return result
+        if self._create_task.done() and (reason := self._create_failure()):
+            return self._progress_failed(reason)
+        return self.async_show_progress_done(next_step_id="teach")
 
-        task, self._create_task = self._create_task, None
-        try:
-            self._created = task.result()
-        except NoFreeSlot:
-            return self._progress_failed("no_free_slot")
-        except (WakeTimeout, ScaleError) as err:
-            return self._progress_failed(_failure_reason(err))
+    async def async_step_teach(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Teaching: wait for the next live reading of the new scale user."""
+        taken = len(self._teaching.readings)
+        if result := self._progress_until(
+            "teach",
+            "teach",
+            lambda: self._async_until_reading(taken + 1),
+            {"reading": str(taken + 1), "readings": str(TEACHING_READINGS)},
+        ):
+            return result
+        assert self._create_task is not None
+        if not self._create_task.done():
+            return self.async_show_progress_done(next_step_id="teach_more")
+        if reason := self._create_failure():
+            return self._progress_failed(reason)
         return self.async_show_progress_done(next_step_id="create_finish")
+
+    async def async_step_teach_more(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Offer another teaching reading or finishing now."""
+        return self.async_show_menu(
+            step_id="teach_more",
+            menu_options=["teach", "teach_done"],
+            description_placeholders={
+                "reading": str(len(self._teaching.readings)),
+                "readings": str(TEACHING_READINGS),
+            },
+        )
+
+    async def async_step_teach_done(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Finish teaching early: disconnect, then create the subentry."""
+        assert self._create_task is not None
+        self._teaching.finish()
+        await asyncio.wait({self._create_task})
+        if reason := self._create_failure():
+            return self.async_abort(reason=reason)
+        return await self.async_step_create_finish()
 
     async def async_step_create_finish(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
         """Create the subentry of the new scale user."""
-        assert self._created is not None
-        assert self._new_profile is not None
+        self._keep_teaching_readings()
+        self._entry_created = True
         return self.async_create_entry(
             title=self._name,
-            unique_id=slot_unique_id(self._created.slot),
-            data={
-                CONF_SLOT: self._created.slot,
-                CONF_CONSENT_CODE: self._created.consent_code,
-                CONF_NAME: self._name,
-                CONF_PERSON: self._person_id,
-                CONF_PROFILE: profile_data(self._new_profile),
-            },
+            unique_id=self._new_unique_id(),
+            data=self._new_data(),
+            description="teaching_timeout" if self._teaching.timed_out else None,
         )
+
+    @callback
+    def async_remove(self) -> None:
+        """Clean up after the flow closed, finished or not.
+
+        Before teaching ended, the scale user is deleted on the scale again. One
+        whose teaching ended with a reading stays on the scale, so it gets its
+        subentry even when the flow is closed without finishing.
+        """
+        if self._milestone is not None:
+            self._milestone.cancel()
+        task = self._create_task
+        if task is None or self._entry_created:
+            return
+        if not task.done():
+            task.cancel()
+            return
+        if self._create_failure() is None:
+            self._keep_teaching_readings()
+            self.hass.config_entries.async_add_subentry(
+                self._get_entry(),
+                ConfigSubentry(
+                    data=MappingProxyType(self._new_data()),
+                    subentry_type=SUBENTRY_SCALE_USER,
+                    title=self._name,
+                    unique_id=self._new_unique_id(),
+                ),
+            )
 
     async def async_step_adopt(
         self, user_input: dict[str, Any] | None = None
@@ -357,20 +438,126 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
         return profile
 
     async def _async_create(self) -> CreatedScaleUser:
-        """Wait for the wake, then create the scale user and write its profile.
+        """Wait for the wake, create the scale user, write its profile and teach.
 
-        On any failure or cancellation after the registration, `create_scale_user`
+        On any failure or cancellation before teaching ended, `create_scale_user`
         deletes the scale user on the scale again before the session disconnects.
         """
         assert self._new_profile is not None
         address: str = self._get_entry().data[CONF_ADDRESS]
         await async_wait_for_wake(self.hass, address)
-        async with async_open_session(self.hass, address, self._model()) as session:
+        self._sync_start = dt_util.now()
+        async with async_open_session(
+            self.hass, address, self._model(), session_timeout=_create_session_timeout()
+        ) as session:
             await session.set_time(dt_util.now())
             async with create_scale_user(session, self._new_profile) as created:
-                # Teaching (#9) plugs in here, while the new scale user is consented.
-                pass
+                self._created = created
+                self._created_event.set()
+                await session.subscribe_readings()
+                await self._teaching.run(session)
         return created
+
+    def _progress_until(
+        self,
+        step_id: str,
+        progress_action: str,
+        milestone: Callable[[], Awaitable[Any]],
+        description_placeholders: Mapping[str, str] | None = None,
+    ) -> SubentryFlowResult | None:
+        """Show a progress step until `milestone` or the create task is done.
+
+        Returns None once it is done; the step then decides where to go.
+        """
+        if self._milestone is None:
+            self._milestone = self.hass.async_create_background_task(
+                self._async_until_either(milestone()), f"beurer_scales {step_id}"
+            )
+        elif self._milestone.done():
+            self._milestone = None
+            return None
+        return self.async_show_progress(
+            step_id=step_id,
+            progress_action=progress_action,
+            progress_task=self._milestone,
+            description_placeholders=description_placeholders,
+        )
+
+    async def _async_until_either(self, milestone: Awaitable[Any]) -> None:
+        """Return at `milestone` or when the create task ends, whichever is first."""
+        assert self._create_task is not None
+        waiting = asyncio.ensure_future(milestone)
+        try:
+            await asyncio.wait(
+                {waiting, self._create_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+        finally:
+            waiting.cancel()
+
+    async def _async_until_reading(self, count: int) -> None:
+        """Return once teaching took `count` readings, except for the last one.
+
+        Teaching ends right after the last reading; the step waits for the create
+        task to disconnect instead.
+        """
+        if count >= TEACHING_READINGS:
+            await asyncio.get_running_loop().create_future()
+        await self._teaching.wait_for_readings(count)
+
+    def _create_failure(self) -> str | None:
+        """The abort reason of a failed create task; None if it succeeded."""
+        assert self._create_task is not None
+        if self._create_task.cancelled():
+            # The scale's entry was unloaded meanwhile.
+            return "cannot_connect"
+        try:
+            self._create_task.result()
+        except TeachingTimeout:
+            return "teaching_timeout"
+        except NoFreeSlot:
+            return "no_free_slot"
+        except (WakeTimeout, ScaleError) as err:
+            return _failure_reason(err)
+        return None
+
+    def _new_unique_id(self) -> str:
+        assert self._created is not None
+        return slot_unique_id(self._created.slot)
+
+    def _new_data(self) -> dict[str, Any]:
+        """The subentry data of the created scale user."""
+        assert self._created is not None
+        assert self._new_profile is not None
+        return {
+            CONF_SLOT: self._created.slot,
+            CONF_CONSENT_CODE: self._created.consent_code,
+            CONF_NAME: self._name,
+            CONF_PERSON: self._person_id,
+            CONF_PROFILE: profile_data(self._new_profile),
+        }
+
+    def _keep_teaching_readings(self) -> None:
+        """Hand the teaching readings to the sync pipeline, like fresh readings."""
+        assert self._created is not None
+        async_hand_over_readings(
+            self.hass,
+            self._get_entry().entry_id,
+            self._created.slot,
+            self._teaching.readings,
+            self._sync_start,
+        )
+
+
+def _create_session_timeout() -> float:
+    """The time budget of a create session.
+
+    Teaching keeps the scale awake (V3), so the session may outlast the wake
+    window; each teaching reading has its own timeout on top.
+    """
+    return (
+        protocol_session.SESSION_TIMEOUT
+        + TEACHING_READINGS * protocol_teaching.TEACHING_TIMEOUT
+    )
 
 
 def _failure_reason(err: Exception) -> str:
