@@ -1,0 +1,34 @@
+[project]
+name = "ha-beurer-scales"
+version = "0.0.0"
+description = "Home Assistant custom integration for Beurer Bluetooth scales"
+requires-python = ">=3.14.2"
+license = "MIT"
+
+[dependency-groups]
+dev = [
+    "mypy==1.18.2",
+    "pytest-homeassistant-custom-component==0.13.372",
+    "ruff==0.14.0",
+    # Requirements of the core integrations we depend on (bluetooth -> usb);
+    # the test harness doesn't install them. Pinned to HA 2026.10.1's manifests.
+    "aiousbwatcher==1.1.2",
+    "bleak==3.0.2",
+    "bleak-retry-connector==4.7.1",
+    "bluetooth-adapters==2.4.0",
+    "bluetooth-auto-recovery==1.6.4",
+    "bluetooth-data-tools==1.29.24",
+    "dbus-fast==5.0.22",
+    "habluetooth==7.1.2",
+    "serialx==1.11.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.mypy]
+strict = true
+explicit_package_bases = true
+files = ["custom_components/beurer_scales"]
