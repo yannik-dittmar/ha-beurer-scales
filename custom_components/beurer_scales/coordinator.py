@@ -7,6 +7,7 @@ whether from a sync or handed over by a flow that consented, goes through
 """
 
 import logging
+from copy import deepcopy
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from typing import Any
@@ -59,6 +60,17 @@ def pending_slots(service_data: Mapping[str, bytes]) -> tuple[int, ...]:
     return ()
 
 
+def subentries_snapshot(entry: ConfigEntry[Any]) -> dict[str, Any]:
+    """A copy of the entry's subentries to tell later whether any changed.
+
+    HA updates a subentry in place, so the subentry objects can't be kept.
+    """
+    return {
+        subentry_id: (subentry.title, subentry.unique_id, deepcopy(dict(subentry.data)))
+        for subentry_id, subentry in entry.subentries.items()
+    }
+
+
 @callback
 def async_hand_over_readings(
     hass: HomeAssistant, entry_id: str, slot: int, readings: Iterable[Reading]
@@ -83,7 +95,7 @@ class ScaleCoordinator:
         self.entry = entry
         self.address: str = entry.data[CONF_ADDRESS]
         self.model = model_by_name(entry.data[CONF_MODEL])
-        self.subentries_at_setup = dict(entry.subentries)
+        self.subentries_at_setup = subentries_snapshot(entry)
         self.battery_percent: int | None = None
         self.last_sync: datetime | None = None
         self._latest: dict[int, Reading] = {}

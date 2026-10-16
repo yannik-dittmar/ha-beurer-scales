@@ -7,12 +7,19 @@ flows. It is cleared once the scale user syncs again or is removed.
 """
 
 from enum import StrEnum
+from typing import Any
 
+from homeassistant.components.repairs import FlowType, RepairsFlow, RepairsFlowResult
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import issue_registry as ir
 
-from .const import DOMAIN
+from .const import (
+    DOMAIN,
+    SOURCE_REPAIR_ADOPT,
+    SOURCE_REPAIR_CREATE,
+    SUBENTRY_SCALE_USER,
+)
 
 # --- Scale user issues: wrong code, deleted, factory reset (#12) ---
 
@@ -79,3 +86,107 @@ def async_scale_user_issue(
         if registry.async_get_issue(DOMAIN, scale_user_issue_id(kind, subentry_id)):
             return kind
     return None
+
+
+@callback
+def async_clear_orphaned_scale_user_issues(
+    hass: HomeAssistant, entry: ConfigEntry, *, all_of_entry: bool = False
+) -> None:
+    """Close the scale user issues of an entry whose scale user is gone.
+
+    With `all_of_entry`, close every scale user issue of the entry (the entry
+    is being removed).
+    """
+    registry = ir.async_get(hass)
+    for issue in list(registry.issues.values()):
+        data = issue.data or {}
+        if (
+            issue.domain == DOMAIN
+            and data.get(ISSUE_DATA_ENTRY_ID) == entry.entry_id
+            and (
+                all_of_entry or data.get(ISSUE_DATA_SUBENTRY_ID) not in entry.subentries
+            )
+        ):
+            ir.async_delete_issue(hass, DOMAIN, issue.issue_id)
+
+
+class ScaleUserRepairFlow(RepairsFlow):
+    """Fix a scale user issue: enter the code again, create again, or remove.
+
+    Entering the code and creating continue in the scale user subentry flow;
+    that flow clears the issue once it succeeds.
+    """
+
+    def __init__(self, kind: ScaleUserIssue, entry_id: str, subentry_id: str) -> None:
+        """Fix the issue of one scale user."""
+        self._kind = kind
+        self._entry_id = entry_id
+        self._subentry_id = subentry_id
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> RepairsFlowResult:
+        """Offer the fixes that fit the issue."""
+        if (subentry := self._subentry()) is None:
+            ir.async_delete_issue(self.hass, DOMAIN, self.issue_id)
+            return self.async_abort(reason="scale_user_removed")
+        options = ["create", "remove"]
+        if self._kind is ScaleUserIssue.WRONG_CONSENT_CODE:
+            options.insert(0, "adopt")
+        return self.async_show_menu(
+            step_id="init",
+            menu_options=options,
+            description_placeholders={"name": subentry.title},
+        )
+
+    async def async_step_adopt(
+        self, user_input: dict[str, Any] | None = None
+    ) -> RepairsFlowResult:
+        """Enter the consent code again."""
+        return await self._async_continue_in(SOURCE_REPAIR_ADOPT)
+
+    async def async_step_create(
+        self, user_input: dict[str, Any] | None = None
+    ) -> RepairsFlowResult:
+        """Create the scale user on the scale again."""
+        return await self._async_continue_in(SOURCE_REPAIR_CREATE)
+
+    async def async_step_remove(
+        self, user_input: dict[str, Any] | None = None
+    ) -> RepairsFlowResult:
+        """Remove the scale user from Home Assistant; this closes the issue."""
+        entry = self.hass.config_entries.async_get_known_entry(self._entry_id)
+        self.hass.config_entries.async_remove_subentry(entry, self._subentry_id)
+        return self.async_create_entry(data={})
+
+    def _subentry(self) -> ConfigSubentry | None:
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        return entry.subentries.get(self._subentry_id) if entry else None
+
+    async def _async_continue_in(self, source: str) -> RepairsFlowResult:
+        result = await self.hass.config_entries.subentries.async_init(
+            (self._entry_id, SUBENTRY_SCALE_USER),
+            context={"source": source, "subentry_id": self._subentry_id},
+        )
+        # Aborting keeps the issue open until the subentry flow fixed it.
+        return self.async_abort(
+            reason="continue_in_scale_user_flow",
+            next_flow=(FlowType.CONFIG_SUBENTRIES_FLOW, result["flow_id"]),
+        )
+
+
+async def async_create_fix_flow(
+    hass: HomeAssistant,
+    issue_id: str,
+    data: dict[str, str | int | float | None] | None,
+) -> RepairsFlow:
+    """Create the fix flow of a fixable issue."""
+    data = data or {}
+    for kind in ScaleUserIssue:
+        if issue_id.startswith(f"{kind}_"):
+            return ScaleUserRepairFlow(
+                kind,
+                str(data[ISSUE_DATA_ENTRY_ID]),
+                str(data[ISSUE_DATA_SUBENTRY_ID]),
+            )
+    raise ValueError(f"No fix flow for issue {issue_id}")

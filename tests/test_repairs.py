@@ -26,9 +26,7 @@ from .test_sync import ANNA, WEIGHT, anna_scale, local_now, state
 @pytest.fixture(autouse=True)
 def no_retry_delay(monkeypatch: pytest.MonkeyPatch) -> None:
     """Let every wake try to sync, so only an open repair holds a sync back."""
-    monkeypatch.setattr(
-        "custom_components.beurer_scales.coordinator.RETRY_DELAY", 0.0
-    )
+    monkeypatch.setattr("custom_components.beurer_scales.coordinator.RETRY_DELAY", 0.0)
 
 
 async def setup_anna(hass: HomeAssistant) -> MockConfigEntry:

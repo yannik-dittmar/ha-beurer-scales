@@ -5,8 +5,15 @@ from datetime import date
 from typing import Any
 
 import probatio
-from homeassistant.config_entries import ConfigSubentryFlow, SubentryFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigSubentry,
+    ConfigSubentryFlow,
+    SubentryFlowResult,
+)
 from homeassistant.const import CONF_ADDRESS
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.selector import (
     DateSelector,
@@ -30,6 +37,7 @@ from .const import (
     CONF_PERSON,
     CONF_PROFILE,
     CONF_SLOT,
+    DOMAIN,
     PROFILE_ACTIVITY_LEVEL,
     PROFILE_BIRTH_DATE,
     PROFILE_GENDER,
@@ -48,6 +56,7 @@ from .protocol.models import ScaleModel, model_by_name
 from .protocol.profile import Profile
 from .protocol.readings import Reading
 from .protocol.scale_user import CreatedScaleUser, create_scale_user
+from .repairs import async_clear_scale_user_issues
 
 # Beurer's supported ranges for body-composition scales.
 MIN_HEIGHT_CM = 100
@@ -58,6 +67,10 @@ MAX_AGE = 100
 
 class SlotNotFound(ScaleError):
     """The scale's user list has no scale user in the slot."""
+
+
+class SlotHeldByOtherScaleUser(ScaleError):
+    """The scale put a recreated scale user into another scale user's slot."""
 
 
 def profile_data(profile: UserListEntry | Profile) -> dict[str, Any]:
@@ -371,6 +384,205 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
                 # Teaching (#9) plugs in here, while the new scale user is consented.
                 pass
         return created
+
+    # --- Repair fix flows (#12): enter the code again, or create again ---
+    # Started by the repair issue's fix flow with context["subentry_id"]; they
+    # update that scale user's subentry and close its repair issue.
+
+    async def async_step_repair_adopt(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Ask for the scale user's consent code again."""
+        subentry = self._repair_subentry()
+        errors, self._errors = self._errors, {}
+        if user_input is not None:
+            self._input = {
+                CONF_SLOT: subentry.data[CONF_SLOT],
+                CONF_CONSENT_CODE: user_input[CONF_CONSENT_CODE],
+            }
+            return await self.async_step_repair_adopt_wake()
+
+        schema = probatio.Schema(
+            {
+                probatio.Required(CONF_CONSENT_CODE): NumberSelector(
+                    NumberSelectorConfig(
+                        min=0, max=9999, step=1, mode=NumberSelectorMode.BOX
+                    )
+                ),
+            }
+        )
+        return self.async_show_form(
+            step_id="repair_adopt",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={
+                "name": subentry.title,
+                "slot": str(subentry.data[CONF_SLOT]),
+            },
+        )
+
+    async def async_step_repair_adopt_wake(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Wait for the wake, then verify the code like adopt does."""
+        if self._task is None:
+            self._task = self.hass.async_create_task(self._async_adopt())
+        if not self._task.done():
+            return self.async_show_progress(
+                step_id="repair_adopt_wake",
+                progress_action="wake",
+                progress_task=self._task,
+            )
+
+        task, self._task = self._task, None
+        try:
+            self._profile = task.result()
+        except SlotNotFound:
+            return self._progress_failed("slot_now_empty")
+        except ConsentRejected:
+            self._errors = {CONF_CONSENT_CODE: "invalid_consent_code"}
+            return self.async_show_progress_done(next_step_id="repair_adopt")
+        except (WakeTimeout, ScaleError) as err:
+            return self._progress_failed(_failure_reason(err))
+        return self.async_show_progress_done(next_step_id="repair_adopt_finish")
+
+    async def async_step_repair_adopt_finish(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Store the working code and the scale's profile; close the repair."""
+        assert self._profile is not None
+        entry, subentry = self._get_entry(), self._repair_subentry()
+        async_hand_over_readings(
+            self.hass, entry.entry_id, self._profile.slot, self._readings
+        )
+        async_clear_scale_user_issues(self.hass, subentry.subentry_id)
+        return self.async_update_and_abort(
+            entry,
+            subentry,
+            data_updates={
+                CONF_CONSENT_CODE: int(self._input[CONF_CONSENT_CODE]),
+                CONF_PROFILE: profile_data(self._profile),
+            },
+            reason="scale_user_repaired",
+        )
+
+    async def async_step_repair_create(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Confirm creating the scale user again with its stored profile."""
+        subentry = self._repair_subentry()
+        stored = subentry.data[CONF_PROFILE]
+        if not stored.get(PROFILE_BIRTH_DATE) or not stored.get(PROFILE_HEIGHT_CM):
+            return self.async_abort(reason="profile_unknown")
+        if user_input is not None:
+            self._new_profile = Profile(
+                birth_date=date.fromisoformat(stored[PROFILE_BIRTH_DATE]),
+                height_cm=int(stored[PROFILE_HEIGHT_CM]),
+                gender=Gender(stored[PROFILE_GENDER]),
+                activity_level=int(stored[PROFILE_ACTIVITY_LEVEL]),
+            )
+            return await self.async_step_repair_create_wake()
+        return self.async_show_form(
+            step_id="repair_create",
+            data_schema=probatio.Schema({}),
+            description_placeholders={"name": subentry.title},
+        )
+
+    async def async_step_repair_create_wake(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Wait for the wake, then create the scale user on the scale again."""
+        if self._create_task is None:
+            self._create_task = self.hass.async_create_task(self._async_recreate())
+        if not self._create_task.done():
+            return self.async_show_progress(
+                step_id="repair_create_wake",
+                progress_action="create",
+                progress_task=self._create_task,
+            )
+
+        task, self._create_task = self._create_task, None
+        try:
+            self._created = task.result()
+        except NoFreeSlot:
+            return self._progress_failed("no_free_slot")
+        except SlotHeldByOtherScaleUser:
+            return self._progress_failed("slot_held_by_other_scale_user")
+        except (WakeTimeout, ScaleError) as err:
+            return self._progress_failed(_failure_reason(err))
+        return self.async_show_progress_done(next_step_id="repair_create_finish")
+
+    async def async_step_repair_create_finish(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Store the new slot and code; close the repair."""
+        assert self._created is not None
+        entry, subentry = self._get_entry(), self._repair_subentry()
+        async_move_scale_user(self.hass, entry, subentry, self._created.slot)
+        async_clear_scale_user_issues(self.hass, subentry.subentry_id)
+        return self.async_update_and_abort(
+            entry,
+            subentry,
+            unique_id=slot_unique_id(self._created.slot),
+            data_updates={
+                CONF_SLOT: self._created.slot,
+                CONF_CONSENT_CODE: self._created.consent_code,
+            },
+            reason="scale_user_repaired",
+        )
+
+    def _repair_subentry(self) -> ConfigSubentry:
+        return self._get_entry().subentries[self.context["subentry_id"]]
+
+    async def _async_recreate(self) -> CreatedScaleUser:
+        """Like `_async_create`, but the scale user must not take another's slot.
+
+        The scale picks the slot. If another scale user of this scale still
+        holds it in HA, the new scale user is deleted again.
+        """
+        assert self._new_profile is not None
+        subentry_id = self.context["subentry_id"]
+        address: str = self._get_entry().data[CONF_ADDRESS]
+        await async_wait_for_wake(self.hass, address)
+        async with async_open_session(self.hass, address, self._model()) as session:
+            await session.set_time(dt_util.now())
+            async with create_scale_user(session, self._new_profile) as created:
+                if any(
+                    s.unique_id == slot_unique_id(created.slot)
+                    and s.subentry_id != subentry_id
+                    for s in self._get_entry().subentries.values()
+                ):
+                    raise SlotHeldByOtherScaleUser(f"slot {created.slot}")
+        return created
+
+
+@callback
+def async_move_scale_user(
+    hass: HomeAssistant, entry: ConfigEntry, subentry: ConfigSubentry, slot: int
+) -> None:
+    """Move a scale user's device and entities to a new slot, keeping their history.
+
+    Device identifiers and entity unique ids carry the slot (`{address}_slot_{n}`).
+    """
+    address: str = entry.data[CONF_ADDRESS]
+    old, new = f"{address}_slot_{subentry.data[CONF_SLOT]}", f"{address}_slot_{slot}"
+    if old == new:
+        return
+    device_registry = dr.async_get(hass)
+    for device in dr.async_entries_for_config_entry(device_registry, entry.entry_id):
+        if (DOMAIN, old) in device.identifiers:
+            device_registry.async_update_device(
+                device.id, new_identifiers={(DOMAIN, new)}
+            )
+    entity_registry = er.async_get(hass)
+    for entity in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
+        if entity.config_subentry_id == subentry.subentry_id and (
+            entity.unique_id.startswith(f"{old}_")
+        ):
+            entity_registry.async_update_entity(
+                entity.entity_id,
+                new_unique_id=new + entity.unique_id.removeprefix(old),
+            )
 
 
 def _failure_reason(err: Exception) -> str:

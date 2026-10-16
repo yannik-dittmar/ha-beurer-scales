@@ -8,6 +8,10 @@ CONF_MODEL = "model"
 # A config subentry per scale user (ADR 0004).
 SUBENTRY_SCALE_USER = "scale_user"
 
+# Subentry flow sources of the repair fix flows (#12), with context["subentry_id"].
+SOURCE_REPAIR_ADOPT = "repair_adopt"
+SOURCE_REPAIR_CREATE = "repair_create"
+
 # Scale user subentry data.
 CONF_SLOT = "slot"
 CONF_CONSENT_CODE = "consent_code"
