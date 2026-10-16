@@ -113,3 +113,16 @@ def test_malformed_ucp_responses_are_rejected(frame: bytes) -> None:
     """A UCP frame that isn't a response to a known request raises FrameError."""
     with pytest.raises(FrameError):
         decode_ucp_response(frame)
+
+
+def test_wifi_user_list_entry_has_an_extra_byte_before_gender() -> None:
+    """Wi-Fi models (BF880/BF980/BF990) send 13-byte entries (§4)."""
+    frame = bytes.fromhex("00 03 ff ff ff c1 07 04 0c b4 7f 01 02")
+
+    entry = decode_user_list_frame(frame)
+
+    assert entry.slot == 3
+    assert entry.birth_date == date(1985, 4, 12)
+    assert entry.height_cm == 180
+    assert entry.gender is Gender.FEMALE
+    assert entry.activity_level == 2

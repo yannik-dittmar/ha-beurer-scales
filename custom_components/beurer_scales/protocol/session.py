@@ -48,7 +48,6 @@ from .models import (
     ScaleModel,
 )
 from .profile import (
-    DATABASE_CHANGE_INCREMENT,
     Profile,
     encode_activity_level,
     encode_birth_date,
@@ -232,9 +231,14 @@ class ScaleSession:
     async def write_profile(self, profile: Profile) -> None:
         """Write the consented scale user's profile, in the app's order (§4)."""
         await self._write(DATE_OF_BIRTH_UUID, encode_birth_date(profile))
-        await self._write(DATABASE_CHANGE_INCREMENT_UUID, DATABASE_CHANGE_INCREMENT)
+        await self._write(
+            DATABASE_CHANGE_INCREMENT_UUID, self._model.database_change_increment
+        )
         await self._write(GENDER_UUID, encode_gender(profile))
-        await self._write(HEIGHT_UUID, encode_height(profile))
+        await self._write(
+            HEIGHT_UUID,
+            encode_height(profile, one_byte=self._model.one_byte_height),
+        )
         await self._write(
             self._model.activity_level_uuid, encode_activity_level(profile)
         )
@@ -348,7 +352,9 @@ class ScaleSession:
 
     async def _write(self, uuid: str, data: bytes) -> None:
         try:
-            await self._client.write_gatt_char(uuid, data, response=True)
+            await self._client.write_gatt_char(
+                uuid, data, response=self._model.write_with_response
+            )
         except BleakError as err:
             raise ScaleConnectionError(f"write {uuid}: {err}") from err
 

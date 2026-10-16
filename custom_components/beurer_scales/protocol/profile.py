@@ -28,9 +28,9 @@ def encode_gender(profile: Profile) -> bytes:
     return bytes([1 if profile.gender is Gender.FEMALE else 0])
 
 
-def encode_height(profile: Profile) -> bytes:
-    """Height 0x2A8E: `[cm, 0]` (BF450, §9.2 step 7)."""
-    return bytes([profile.height_cm, 0])
+def encode_height(profile: Profile, *, one_byte: bool = False) -> bytes:
+    """Height 0x2A8E: `[cm, 0]` (BF450, §9.2 step 7), or `[cm]` (BF500, §4)."""
+    return bytes([profile.height_cm] if one_byte else [profile.height_cm, 0])
 
 
 def encode_activity_level(profile: Profile) -> bytes:

@@ -121,6 +121,8 @@ class FakeScale:
     stalled: bool = False
     # Slots whose scale user was deleted over a live connection (UCP 03).
     deleted_while_connected: list[int] = field(default_factory=list)
+    # Every write the scale received: (characteristic, data, with response).
+    writes: list[tuple[str, bytes, bool | None]] = field(default_factory=list)
 
     def add_user(self, slot: int, consent_code: int, **profile: Any) -> FakeScaleUser:
         """Store a scale user in a slot."""
@@ -226,6 +228,7 @@ class FakeBleakClient:
         self._check_link()
         uuid = str(char_specifier).lower()
         data = bytes(data)
+        self._scale.writes.append((uuid, data, response))
         await self._misbehave(uuid)
         if uuid == CURRENT_TIME:
             self._scale.clock = datetime(

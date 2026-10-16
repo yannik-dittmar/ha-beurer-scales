@@ -10,6 +10,7 @@ from enum import StrEnum
 from typing import Any
 
 from .metrics import Metric
+from .profile import DATABASE_CHANGE_INCREMENT
 
 # The BF450 advertises the Weight Scale service (0x181D) byte-swapped, as 0x1D18;
 # its service data holds the pending-slot list (protocol doc §2).
@@ -110,9 +111,6 @@ FRAME_METRICS: dict[FrameKind, tuple[Metric, ...]] = {
         Metric.TORSO_MUSCLE,
     ),
 }
-
-# What the app writes to Database Change Increment 0x2A99 after a profile change.
-DATABASE_CHANGE_INCREMENT = bytes([0x01, 0x00, 0x00, 0x00])
 
 ReadingFrames = tuple[tuple[str, FrameKind], ...]
 

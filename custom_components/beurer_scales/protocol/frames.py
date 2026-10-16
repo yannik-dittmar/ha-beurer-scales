@@ -39,6 +39,7 @@ class UserListEnd(Enum):
 
 
 _USER_LIST_ENTRY_LENGTH = 12
+_WIFI_USER_LIST_ENTRY_LENGTH = 13
 
 
 def decode_user_list_frame(frame: bytes) -> UserListEntry | UserListEnd:
@@ -48,8 +49,10 @@ def decode_user_list_frame(frame: bytes) -> UserListEntry | UserListEnd:
             return UserListEnd(frame[0])
         except ValueError as err:
             raise FrameError(f"unknown user list marker {frame.hex()}") from err
-    if len(frame) != _USER_LIST_ENTRY_LENGTH:
+    if len(frame) not in (_USER_LIST_ENTRY_LENGTH, _WIFI_USER_LIST_ENTRY_LENGTH):
         raise FrameError(f"user list entry of {len(frame)} bytes: {frame.hex()}")
+    # Wi-Fi models have one extra byte before the gender (§4).
+    gender_at = len(frame) - 2
     raw_initials = frame[2:5]
     initials = (
         raw_initials.decode("ascii").rstrip("\x00 ")
@@ -63,8 +66,8 @@ def decode_user_list_frame(frame: bytes) -> UserListEntry | UserListEnd:
             int.from_bytes(frame[5:7], "little"), frame[7], frame[8]
         ),
         height_cm=frame[9],
-        gender=Gender.FEMALE if frame[10] == 1 else Gender.MALE,
-        activity_level=frame[11],
+        gender=Gender.FEMALE if frame[gender_at] == 1 else Gender.MALE,
+        activity_level=frame[gender_at + 1],
     )
 
 
