@@ -5,6 +5,10 @@ MANUFACTURER = "Beurer"
 
 CONF_MODEL = "model"
 
+# Scale options.
+CONF_NOTIFY_UNRECOGNISED = "notify_unrecognised"
+DEFAULT_NOTIFY_UNRECOGNISED = True
+
 # A config subentry per scale user (ADR 0004).
 SUBENTRY_SCALE_USER = "scale_user"
 

@@ -12,11 +12,20 @@ from homeassistant.config_entries import (
     ConfigFlow,
     ConfigFlowResult,
     ConfigSubentryFlow,
+    OptionsFlow,
 )
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import callback
+from homeassistant.helpers.selector import BooleanSelector
 
-from .const import CONF_MODEL, DOMAIN, MANUFACTURER, SUBENTRY_SCALE_USER
+from .const import (
+    CONF_MODEL,
+    CONF_NOTIFY_UNRECOGNISED,
+    DEFAULT_NOTIFY_UNRECOGNISED,
+    DOMAIN,
+    MANUFACTURER,
+    SUBENTRY_SCALE_USER,
+)
 from .protocol.models import ScaleModel, model_from_advertisement
 from .scale_user_flow import ScaleUserSubentryFlow
 
@@ -37,6 +46,12 @@ class BeurerScalesConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> dict[str, type[ConfigSubentryFlow]]:
         """Scale users are subentries of their scale (ADR 0004)."""
         return {SUBENTRY_SCALE_USER: ScaleUserSubentryFlow}
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+        """The scale's options."""
+        return BeurerScalesOptionsFlow()
 
     def __init__(self) -> None:
         """Initialize the flow."""
@@ -133,4 +148,28 @@ class BeurerScalesConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_create_entry(
             title=_display_name(model),
             data={CONF_ADDRESS: address, CONF_MODEL: model.name},
+        )
+
+
+class BeurerScalesOptionsFlow(OptionsFlow):
+    """The scale's options; the coordinator reads them when needed, so no reload."""
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Choose whether HA notifies about unrecognised weigh-ins."""
+        if user_input is not None:
+            return self.async_create_entry(data=user_input)
+        notify = self.config_entry.options.get(
+            CONF_NOTIFY_UNRECOGNISED, DEFAULT_NOTIFY_UNRECOGNISED
+        )
+        return self.async_show_form(
+            step_id="init",
+            data_schema=probatio.Schema(
+                {
+                    probatio.Required(
+                        CONF_NOTIFY_UNRECOGNISED, default=notify
+                    ): BooleanSelector()
+                }
+            ),
         )

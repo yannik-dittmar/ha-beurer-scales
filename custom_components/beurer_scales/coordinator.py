@@ -11,6 +11,12 @@ backlog and guessed readings are reported, duplicates are dropped (design §5.4)
 Scale users removed in HA are deleted on the scale at the next wake, once that
 wake's weigh-in is final (design §4.3): in the same connection as a sync, or
 `WEIGH_IN_FINAL_DELAY` after the wake started.
+
+A wake that reaches `WEIGH_IN_FINAL_DELAY` without a managed slot pending was an
+unrecognised weigh-in: HA reads the user list, which shows a deletion or a
+factory reset the scale would never report as pending (ADR 0008, design §5.3),
+and may notify about it. The leftover sync, the deletions and this check share
+that one moment per wake, so only one of them connects.
 """
 
 import logging
@@ -32,7 +38,15 @@ from homeassistant.util import dt as dt_util
 from .connection import async_open_session
 from .discards import async_notify_discarded
 from .pending_deletions import PendingDeletions
-from .const import CONF_CONSENT_CODE, CONF_MODEL, CONF_SLOT, DOMAIN, SUBENTRY_SCALE_USER
+from .const import (
+    CONF_CONSENT_CODE,
+    CONF_MODEL,
+    CONF_NOTIFY_UNRECOGNISED,
+    CONF_SLOT,
+    DEFAULT_NOTIFY_UNRECOGNISED,
+    DOMAIN,
+    SUBENTRY_SCALE_USER,
+)
 from .protocol.errors import (
     ConsentRejected,
     PairingFailed,
@@ -59,6 +73,7 @@ from .repairs import (
     async_raise_scale_user_issue,
     async_scale_user_issue,
 )
+from .unrecognised import async_notify_unrecognised
 from .wake import Wake, WakeTracker
 
 _LOGGER = logging.getLogger(__name__)
@@ -70,6 +85,9 @@ RETRY_DELAY = 15.0
 # weigh-in still in progress: connecting would cut it short (the scale sleeps ~1 s
 # after HA disconnects). Wait this long for its slot to be appended (ADR 0008, V7).
 WEIGH_IN_FINAL_DELAY = 25.0
+# Slots listed this early in a wake were pending before it; a slot listed later
+# is the wake's weigh-in, final ~14 s after stepping on (protocol doc §2).
+ALREADY_PENDING_WINDOW = 5.0
 
 _HANDOVER = "handover"
 
@@ -160,6 +178,9 @@ class ScaleCoordinator:
         # Managed slots seen pending and not synced yet (see `sync_order`).
         self._leftovers: set[int] = set()
         self._ignored: list[int] = []
+        # Slots pending since before this wake, and whether one was appended.
+        self._pending_before_wake: set[int] = set()
+        self._recognised = False
         self._due: list[int] = []
         self._device: BLEDevice | None = None
         self._policy = ReadingPolicy()
@@ -323,11 +344,15 @@ class ScaleCoordinator:
 
     @callback
     def _async_on_advertisement(self, info: BluetoothServiceInfoBleak) -> None:
-        self.wakes.async_advertisement()
+        wake = self.wakes.async_advertisement()
+        pending = pending_slots(info.service_data)
+        if wake.elapsed < ALREADY_PENDING_WINDOW:
+            self._pending_before_wake.update(pending)
+        elif any(slot not in self._pending_before_wake for slot in pending):
+            self._recognised = True
         if self._syncing or self.hass.loop.time() < self._retry_after:
             return
         managed = self._managed_slots()
-        pending = pending_slots(info.service_data)
         ignored = [slot for slot in pending if slot not in managed]
         if ignored and ignored != self._ignored:
             _LOGGER.debug("Ignoring pending slots HA doesn't manage: %s", ignored)
@@ -440,6 +465,8 @@ class ScaleCoordinator:
 
     @callback
     def _async_on_wake(self, wake: Wake) -> None:
+        self._pending_before_wake = set()
+        self._recognised = False
         # One moment per wake for the leftover sync, the pending deletions and
         # the user-list check, so they share one connection.
         wake.async_call_at(WEIGH_IN_FINAL_DELAY, self._async_after_weigh_in)
@@ -457,6 +484,10 @@ class ScaleCoordinator:
         if self._due:
             self._async_start_sync()
             return
+        if not self._recognised and self.entry.options.get(
+            CONF_NOTIFY_UNRECOGNISED, DEFAULT_NOTIFY_UNRECOGNISED
+        ):
+            async_notify_unrecognised(self.hass, self.address, self.entry.title)
         if not self._scale_users() and not self.pending_deletions:
             return
         self._syncing = True

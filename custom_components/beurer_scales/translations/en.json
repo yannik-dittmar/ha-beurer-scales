@@ -334,5 +334,18 @@
         }
       }
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Scale options",
+        "data": {
+          "notify_unrecognised": "Notify about unrecognised weigh-ins"
+        },
+        "data_description": {
+          "notify_unrecognised": "Send a notification when someone steps on the scale and it recognises them as none of its scale users, so they can be added."
+        }
+      }
+    }
   }
 }
