@@ -169,6 +169,8 @@ class ScaleSession:
         self._readings_returned = 0
         self._reading_frame = asyncio.Event()
         self._reading_subscriptions: set[str] = set()
+        # The reading each FFF4 `01` completed, until teaching takes it.
+        self._live_readings: asyncio.Queue[Reading] = asyncio.Queue()
 
     @property
     def model(self) -> ScaleModel:
@@ -277,6 +279,8 @@ class ScaleSession:
                 # FFF4 `01` only says a live reading has finished.
                 if uuid != self._model.live_reading_done_uuid:
                     self._readings.add(uuid, bytes(data))
+                elif readings := self._readings.readings():
+                    self._live_readings.put_nowait(readings[-1])
                 self._reading_frame.set()
 
             try:
@@ -304,6 +308,23 @@ class ScaleSession:
             len(readings),
         )
         return new
+
+    async def wait_for_live_reading(
+        self, *, quiet_period: float | None = None
+    ) -> Reading:
+        """Wait for the next live reading of the consented scale user (teaching).
+
+        Call `subscribe_readings` first. A reading counts once the scale says it is
+        complete (FFF4 `01`); readings that finished before this call are returned
+        one by one, oldest first. Models without that signal count a reading once
+        the scale is quiet. Has no timeout of its own.
+        """
+        if self._model.live_reading_done_uuid:
+            return await self._live_readings.get()
+        while True:
+            await self._reading_frame.wait()
+            if new := await self.collect_readings(quiet_period=quiet_period):
+                return new[-1]
 
     async def read_battery(self) -> int | None:
         """Read the battery level in percent; None if the scale doesn't say."""
