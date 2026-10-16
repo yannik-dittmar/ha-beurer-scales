@@ -1,21 +1,19 @@
 """Several pending slots in one wake: the fresh weigh-in first, then the others."""
 
 import logging
-from datetime import timedelta
 
 import pytest
+from freezegun.api import FrozenDateTimeFactory
 from homeassistant.const import CONF_ADDRESS, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
-from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
-    async_fire_time_changed,
 )
 
 from custom_components.beurer_scales.const import CONF_MODEL, DOMAIN
 
 from . import frames
-from .conftest import SCALE_ADDRESS, SWAPPED_WEIGHT_SCALE_UUID, wake_scale
+from .conftest import SCALE_ADDRESS, SWAPPED_WEIGHT_SCALE_UUID, stay_awake, wake_scale
 from .fake_scale import FakeReading, FakeScale, SecondConsent
 from .test_sync import ANNA, local_now, state
 
@@ -83,12 +81,15 @@ async def test_other_pending_slots_are_drained_in_the_same_connection(
     assert not fake_scale.connected
 
 
+# The sync waits for a quiet period, so time has to run.
+@pytest.mark.freeze_time(tick=True)
 @pytest.mark.parametrize("refusal", ["rejected", "dropped"])
 async def test_a_refused_second_consent_leaves_the_rest_for_a_later_wake(
     hass: HomeAssistant,
     household: MockConfigEntry,
     fake_scale: FakeScale,
     refusal: SecondConsent,
+    freezer: FrozenDateTimeFactory,
 ) -> None:
     """One consent per connection: the newest slot now, the other one next wake."""
     fake_scale.second_consent = refusal
@@ -104,8 +105,7 @@ async def test_a_refused_second_consent_leaves_the_rest_for_a_later_wake(
     assert not fake_scale.connected
 
     await wake_scale(hass, fake_scale)
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=30))
-    await hass.async_block_till_done(wait_background_tasks=True)
+    await stay_awake(hass, freezer, fake_scale, 30)
 
     assert state(hass, BEN_WEIGHT).state == "77.9"
     assert pending(fake_scale) == b""
@@ -141,21 +141,23 @@ async def test_the_newly_pending_slot_is_synced_first(
     assert pending(fake_scale) == b""
 
 
+@pytest.mark.freeze_time(tick=True)
 async def test_unmanaged_pending_slots_are_ignored_quietly(
     hass: HomeAssistant,
     household: MockConfigEntry,
     fake_scale: FakeScale,
     caplog: pytest.LogCaptureFixture,
+    freezer: FrozenDateTimeFactory,
 ) -> None:
-    """Another client's slot is never consented and never causes a connection."""
+    """Another client's slot is never consented and never causes a sync."""
     caplog.set_level(logging.DEBUG, logger="custom_components.beurer_scales")
     fake_scale.add_user(slot=3, consent_code=5555)
     weigh_in(fake_scale, 3)
 
     await wake_scale(hass, fake_scale)
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=30))
-    await hass.async_block_till_done(wait_background_tasks=True)
-    assert fake_scale.connection_attempts == 0
+    await stay_awake(hass, freezer, fake_scale, 30)
+    # Nobody HA manages was recognised: HA only checks the user list (ADR 0008).
+    assert consents(fake_scale) == []
 
     weigh_in(fake_scale, 2)
     await wake_scale(hass, fake_scale)

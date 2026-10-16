@@ -1,7 +1,6 @@
 """Removing a scale user: gone from HA at once, deleted on the scale at the next wake."""
 
 import logging
-from datetime import timedelta
 from types import MappingProxyType
 
 import pytest
@@ -13,13 +12,12 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
-    async_fire_time_changed,
 )
 
 from custom_components.beurer_scales.const import CONF_MODEL, DOMAIN
 
 from . import frames
-from .conftest import SCALE_ADDRESS, wake_scale
+from .conftest import SCALE_ADDRESS, stay_awake, wake_scale
 from .fake_scale import FakeReading, FakeScale
 from .test_sync import ANNA, WEIGHT, local_now, state
 
@@ -76,21 +74,6 @@ async def remove_bob(hass: HomeAssistant, entry: MockConfigEntry) -> None:
     await hass.async_block_till_done()
 
 
-async def stay_awake(
-    hass: HomeAssistant,
-    freezer: FrozenDateTimeFactory,
-    scale: FakeScale,
-    seconds: float,
-) -> None:
-    """Let time pass while the awake scale keeps advertising (~every 2 s)."""
-    for _ in range(int(seconds // 2)):
-        freezer.tick(timedelta(seconds=2))
-        async_fire_time_changed(hass)
-        await hass.async_block_till_done(wait_background_tasks=True)
-        if scale.awake:
-            await wake_scale(hass, scale)
-
-
 async def test_removing_a_scale_user_removes_its_device_and_entities(
     hass: HomeAssistant,
     scale: MockConfigEntry,
@@ -140,16 +123,19 @@ async def test_the_pending_deletion_is_cleared_once_done(
     fake_scale: FakeScale,
     freezer: FrozenDateTimeFactory,
 ) -> None:
-    """After the deletion, later wakes don't connect for it again."""
+    """After the deletion, later wakes don't consent as Bob again.
+
+    They still connect once to check the user list (ADR 0008).
+    """
     await remove_bob(hass, scale)
     await wake_scale(hass, fake_scale)
     await stay_awake(hass, freezer, fake_scale, 26)
-    attempts = fake_scale.connection_attempts
+    requests = len(fake_scale.ucp_requests)
 
     await wake_scale(hass, fake_scale)
     await stay_awake(hass, freezer, fake_scale, 30)
 
-    assert fake_scale.connection_attempts == attempts
+    assert len(fake_scale.ucp_requests) == requests
 
 
 # The sync waits for a quiet period, so time has to run.
@@ -213,10 +199,10 @@ async def test_a_rejected_consent_drops_the_pending_deletion(
 
     assert 3 in fake_scale.users
     assert "Dropping the deletion of slot 3" in caplog.text
-    attempts = fake_scale.connection_attempts
+    requests = len(fake_scale.ucp_requests)
     await wake_scale(hass, fake_scale)
     await stay_awake(hass, freezer, fake_scale, 30)
-    assert fake_scale.connection_attempts == attempts
+    assert len(fake_scale.ucp_requests) == requests
 
 
 async def test_a_wake_that_ends_early_keeps_the_pending_deletion(

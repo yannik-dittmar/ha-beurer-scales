@@ -2,18 +2,23 @@
 
 import time
 from collections.abc import Iterator
+from datetime import timedelta
 from unittest.mock import patch
 
 import pytest
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
+from freezegun.api import FrozenDateTimeFactory
 from homeassistant.components.bluetooth import (
     BluetoothServiceInfoBleak,
     async_get_advertisement_callback,
 )
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 
 # HA mounts the test plugin's config dir, which ships its own `custom_components`
 # package. Importing ours first makes HA find this repo's integrations.
@@ -144,3 +149,18 @@ async def wake_scale(hass: HomeAssistant, scale: FakeScale) -> None:
             service_data=scale.service_data(),
         ),
     )
+
+
+async def stay_awake(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    scale: FakeScale,
+    seconds: float,
+) -> None:
+    """Let time pass while the awake scale keeps advertising (~every 2 s)."""
+    for _ in range(int(seconds // 2)):
+        freezer.tick(timedelta(seconds=2))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done(wait_background_tasks=True)
+        if scale.awake:
+            await wake_scale(hass, scale)

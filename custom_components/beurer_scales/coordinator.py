@@ -26,7 +26,6 @@ from homeassistant.components.bluetooth import (
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
-from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
@@ -163,7 +162,6 @@ class ScaleCoordinator:
         self._ignored: list[int] = []
         self._due: list[int] = []
         self._device: BLEDevice | None = None
-        self._cancel_leftover_sync: CALLBACK_TYPE | None = None
         self._policy = ReadingPolicy()
         self._reading_log = reading_log_store(hass, entry.entry_id)
         self.pending_deletions = PendingDeletions(hass, entry.entry_id)
@@ -197,7 +195,6 @@ class ScaleCoordinator:
         @callback
         def stop() -> None:
             stop_watching()
-            self._async_cancel_leftover_sync()
             self.wakes.async_stop()
 
         return stop
@@ -339,29 +336,14 @@ class ScaleCoordinator:
         self._device = info.device if info.connectable else None
         if not self._due:
             return
+        # Only leftovers listed: the weigh-in may still be in progress, so they
+        # wait for `_async_after_weigh_in`.
         if any(slot not in self._leftovers for slot in self._due):
             self._async_start_sync()
-        elif self._cancel_leftover_sync is None:
-            self._cancel_leftover_sync = async_call_later(
-                self.hass, WEIGH_IN_FINAL_DELAY, self._async_sync_leftovers
-            )
-
-    @callback
-    def _async_sync_leftovers(self, _now: datetime) -> None:
-        self._cancel_leftover_sync = None
-        if not self._syncing:
-            self._async_start_sync()
-
-    @callback
-    def _async_cancel_leftover_sync(self) -> None:
-        if self._cancel_leftover_sync is not None:
-            self._cancel_leftover_sync()
-            self._cancel_leftover_sync = None
 
     @callback
     def _async_start_sync(self) -> None:
         """Sync the slots of the last advertisement that are still managed."""
-        self._async_cancel_leftover_sync()
         managed = self._managed_slots()
         order = sync_order([s for s in self._due if s in managed], self._leftovers)
         self._leftovers.update(order)
@@ -454,39 +436,50 @@ class ScaleCoordinator:
         for update in list(self._listeners):
             update()
 
-    # --- Pending deletions (design §4.3) ---
+    # --- Once the weigh-in is final (ADR 0008, design §4.3, §5.3) ---
 
     @callback
     def _async_on_wake(self, wake: Wake) -> None:
-        if self.pending_deletions:
-            wake.async_call_at(WEIGH_IN_FINAL_DELAY, self._async_delete_after_weigh_in)
+        # One moment per wake for the leftover sync, the pending deletions and
+        # the user-list check, so they share one connection.
+        wake.async_call_at(WEIGH_IN_FINAL_DELAY, self._async_after_weigh_in)
 
     @callback
-    def _async_delete_after_weigh_in(self) -> None:
-        # A sync runs the deletions itself, after its slots.
-        if self._syncing or not self.pending_deletions:
+    def _async_after_weigh_in(self) -> None:
+        """The wake's weigh-in is final and HA hasn't connected yet.
+
+        Leftover slots are synced now (the sync also runs the deletions);
+        otherwise nobody HA manages was recognised: read the user list and run
+        the deletions in one connection.
+        """
+        if self._syncing:
             return
         if self._due:
             self._async_start_sync()
             return
+        if not self._scale_users() and not self.pending_deletions:
+            return
         self._syncing = True
         self.entry.async_create_background_task(
             self.hass,
-            self._async_delete_session(),
-            f"{DOMAIN} delete scale users {self.address}",
+            self._async_check_session(),
+            f"{DOMAIN} check {self.address}",
         )
 
-    async def _async_delete_session(self) -> None:
+    async def _async_check_session(self) -> None:
         connected = False
         try:
             async with async_open_session(
                 self.hass, self.address, self.model
             ) as session:
                 connected = True
+                users = await session.read_user_list()
+                if self.async_check_user_list(users):
+                    await self.async_rebond(session)
                 await self._async_run_pending_deletions(session)
         except ScaleError as err:
             _LOGGER.warning(
-                "Connecting to %s to delete scale users failed: %r", self.address, err
+                "Checking the scale users of %s failed: %r", self.address, err
             )
         finally:
             self._syncing = False

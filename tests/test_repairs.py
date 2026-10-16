@@ -1,21 +1,18 @@
 """Repair issues and warnings about the scale's Bluetooth path and weight unit."""
 
-from datetime import timedelta
-
 import pytest
+from freezegun.api import FrozenDateTimeFactory
 from homeassistant.const import STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
-from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
-    async_fire_time_changed,
 )
 
 from custom_components.beurer_scales.const import DOMAIN
 
 from . import frames
-from .conftest import wake_scale
+from .conftest import stay_awake, wake_scale
 from .fake_scale import FakeReading, FakeScale
 from .test_sync import WEIGHT, anna, local_now, state
 
@@ -62,11 +59,14 @@ async def test_a_failed_bond_raises_the_same_repair_issue(
     assert issue.translation_key == "pairing_impossible"
 
 
+# The sync waits for a quiet period, so time has to run.
+@pytest.mark.freeze_time(tick=True)
 async def test_the_pairing_issue_clears_after_the_next_successful_sync(
     hass: HomeAssistant,
     anna: MockConfigEntry,
     fake_scale: FakeScale,
     monkeypatch: pytest.MonkeyPatch,
+    freezer: FrozenDateTimeFactory,
 ) -> None:
     """Once a proxy that can pair reaches the scale, the issue goes away."""
     monkeypatch.setattr("custom_components.beurer_scales.coordinator.RETRY_DELAY", 0.0)
@@ -78,8 +78,7 @@ async def test_the_pairing_issue_clears_after_the_next_successful_sync(
     fake_scale.pairing = "supported"
     # The slot is a leftover now: HA syncs it once the weigh-in is final.
     await wake_scale(hass, fake_scale)
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=30))
-    await hass.async_block_till_done(wait_background_tasks=True)
+    await stay_awake(hass, freezer, fake_scale, 30)
 
     assert pairing_issue(hass, anna) is None
     assert state(hass, WEIGHT).state == "78.4"
