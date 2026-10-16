@@ -9,7 +9,8 @@ The fake keeps its own GATT map and frame encoders, taken from the captures in
 §9, so it is an independent source of truth for the code under test.
 
 Implemented so far: waking and sleeping, the required bond, setting the time,
-the user list, consent, stored and live readings, the pending-slot list in the
+the user list, consent (a second one in the same connection allowed, rejected
+or dropped), stored and live readings, the pending-slot list in the
 advertisement, and the battery level. Extend it as later behaviour needs it
 (register and delete, factory reset).
 """
@@ -38,6 +39,9 @@ TAKE_MEASUREMENT = _uuid(0xFFF4)
 SWAPPED_WEIGHT_SCALE_UUID = _uuid(0x1D18)
 
 Pairing = Literal["supported", "unsupported"]
+# How the scale answers a consent for another slot in a connection that already
+# consented one. Unverified on a BF450 (design §8, V2), so the fake can do each.
+SecondConsent = Literal["allowed", "rejected", "dropped"]
 NotifyCallback = Callable[[Any, bytearray], None]
 
 
@@ -83,6 +87,7 @@ class FakeScale:
     pairing: Pairing = "supported"
     # A scale that stops answering on the User Control Point.
     answers_ucp: bool = True
+    second_consent: SecondConsent = "allowed"
 
     awake: bool = False
     # The last time HA set, as the scale decoded it.
@@ -244,7 +249,14 @@ class FakeBleakClient:
             slot = request[1]
             code = int.from_bytes(request[2:4], "little")
             user = self._scale.users.get(slot)
-            if user is not None and user.consent_code == code:
+            second = self.consented_slot not in (None, slot)
+            if second and self._scale.second_consent == "dropped":
+                self._connected = False
+                self._scale.awake = False
+                raise BleakError("Disconnected during consent")
+            if second and self._scale.second_consent == "rejected":
+                self._notify(USER_CONTROL_POINT, b"\x20\x02\x04")
+            elif user is not None and user.consent_code == code:
                 self.consented_slot = slot
                 self._notify(USER_CONTROL_POINT, b"\x20\x02\x01")
                 # Stored readings follow the consent, oldest first (§9.4b),
