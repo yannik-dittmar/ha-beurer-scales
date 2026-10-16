@@ -5,7 +5,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
 from .const import CONF_MODEL, CONF_SLOT, DOMAIN, MANUFACTURER, SUBENTRY_SCALE_USER
-from .coordinator import BeurerConfigEntry, ScaleCoordinator
+from .coordinator import BeurerConfigEntry, ScaleCoordinator, subentries_snapshot
 
 PLATFORMS = [Platform.SENSOR]
 
@@ -48,7 +48,7 @@ async def _async_reload(hass: HomeAssistant, entry: BeurerConfigEntry) -> None:
     Other updates, such as HA recording the discovery key at an advertisement,
     must not reload: that would cut off a sync in progress.
     """
-    if dict(entry.subentries) != entry.runtime_data.subentries_at_setup:
+    if subentries_snapshot(entry) != entry.runtime_data.subentries_at_setup:
         hass.config_entries.async_schedule_reload(entry.entry_id)
 
 

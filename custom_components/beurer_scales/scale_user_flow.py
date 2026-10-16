@@ -5,7 +5,11 @@ from datetime import date
 from typing import Any
 
 import probatio
-from homeassistant.config_entries import ConfigSubentryFlow, SubentryFlowResult
+from homeassistant.config_entries import (
+    ConfigSubentry,
+    ConfigSubentryFlow,
+    SubentryFlowResult,
+)
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.selector import (
@@ -36,7 +40,7 @@ from .const import (
     PROFILE_HEIGHT_CM,
     slot_unique_id,
 )
-from .coordinator import async_hand_over_readings
+from .coordinator import BeurerConfigEntry, async_hand_over_readings
 from .protocol.errors import (
     ConsentRejected,
     NoFreeSlot,
@@ -89,6 +93,8 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
         self._new_profile: Profile | None = None
         self._create_task: asyncio.Task[CreatedScaleUser] | None = None
         self._created: CreatedScaleUser | None = None
+        # The reconfigure path.
+        self._reconfigure_task: asyncio.Task[None] | None = None
         # Readings the scale delivered when the flow consented.
         self._readings: list[Reading] = []
 
@@ -117,30 +123,7 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
                     EntitySelectorConfig(domain="person")
                 ),
                 probatio.Optional(CONF_NAME): TextSelector(),
-                probatio.Required(PROFILE_BIRTH_DATE): DateSelector(),
-                probatio.Required(PROFILE_HEIGHT_CM): NumberSelector(
-                    NumberSelectorConfig(
-                        min=MIN_HEIGHT_CM,
-                        max=MAX_HEIGHT_CM,
-                        step=1,
-                        unit_of_measurement="cm",
-                        mode=NumberSelectorMode.BOX,
-                    )
-                ),
-                probatio.Required(PROFILE_GENDER): SelectSelector(
-                    SelectSelectorConfig(
-                        options=[str(g) for g in Gender],
-                        translation_key=PROFILE_GENDER,
-                        mode=SelectSelectorMode.LIST,
-                    )
-                ),
-                probatio.Required(PROFILE_ACTIVITY_LEVEL): SelectSelector(
-                    SelectSelectorConfig(
-                        options=[str(level) for level in range(1, 6)],
-                        translation_key=PROFILE_ACTIVITY_LEVEL,
-                        mode=SelectSelectorMode.DROPDOWN,
-                    )
-                ),
+                **_profile_fields(),
             }
         )
         return self.async_show_form(
@@ -273,6 +256,122 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
             },
         )
 
+    # --- Reconfigure: change the name, person or profile (design §4.2) ---
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Change the scale user; a profile change needs the scale, a rename doesn't."""
+        subentry = self._get_reconfigure_subentry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            self._input = user_input
+            errors = self._validate_identity(
+                user_input, own=subentry
+            ) or self._validate_profile(user_input)
+            if not errors:
+                assert self._new_profile is not None
+                if profile_data(self._new_profile) == subentry.data[CONF_PROFILE]:
+                    return self._async_save_reconfigure()
+                return await self.async_step_reconfigure_wake()
+
+        schema = probatio.Schema(
+            {
+                probatio.Optional(CONF_PERSON): EntitySelector(
+                    EntitySelectorConfig(domain="person")
+                ),
+                probatio.Optional(CONF_NAME): TextSelector(),
+                **_profile_fields(),
+            }
+        )
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=self.add_suggested_values_to_schema(
+                schema, self._input or self._reconfigure_form_values(subentry)
+            ),
+            errors=errors,
+        )
+
+    async def async_step_reconfigure_wake(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Wait for the wake, then write the new profile to the scale."""
+        if self._reconfigure_task is None:
+            self._reconfigure_task = self.hass.async_create_task(
+                self._async_write_profile()
+            )
+        if not self._reconfigure_task.done():
+            return self.async_show_progress(
+                step_id="reconfigure_wake",
+                progress_action="reconfigure",
+                progress_task=self._reconfigure_task,
+            )
+
+        task, self._reconfigure_task = self._reconfigure_task, None
+        try:
+            task.result()
+        except ConsentRejected:
+            return self._progress_failed("consent_rejected")
+        except (WakeTimeout, ScaleError) as err:
+            return self._progress_failed(_failure_reason(err))
+        return self.async_show_progress_done(next_step_id="reconfigure_finish")
+
+    async def async_step_reconfigure_finish(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Save the changes once the scale has the new profile."""
+        return self._async_save_reconfigure()
+
+    def _async_save_reconfigure(self) -> SubentryFlowResult:
+        """Update the subentry; the reload renames the scale user's device."""
+        assert self._new_profile is not None
+        return self.async_update_and_abort(
+            self._get_entry(),
+            self._get_reconfigure_subentry(),
+            title=self._name,
+            data_updates={
+                CONF_NAME: self._name,
+                CONF_PERSON: self._person_id,
+                CONF_PROFILE: profile_data(self._new_profile),
+            },
+        )
+
+    def _reconfigure_form_values(self, subentry: ConfigSubentry) -> dict[str, Any]:
+        """The form's starting values: what the subentry holds."""
+        profile = subentry.data[CONF_PROFILE]
+        values: dict[str, Any] = {
+            CONF_NAME: subentry.data[CONF_NAME],
+            PROFILE_BIRTH_DATE: profile[PROFILE_BIRTH_DATE],
+            PROFILE_HEIGHT_CM: profile[PROFILE_HEIGHT_CM],
+            PROFILE_GENDER: profile[PROFILE_GENDER],
+            PROFILE_ACTIVITY_LEVEL: str(profile[PROFILE_ACTIVITY_LEVEL]),
+        }
+        person_id = subentry.data.get(CONF_PERSON)
+        if person_id and (person := er.async_get(self.hass).async_get(person_id)):
+            values[CONF_PERSON] = person.entity_id
+        # A profile adopted from an unset scale user has no birth date.
+        return {key: value for key, value in values.items() if value is not None}
+
+    async def _async_write_profile(self) -> None:
+        """Wait for the wake, consent as the scale user and write the profile."""
+        assert self._new_profile is not None
+        entry: BeurerConfigEntry = self._get_entry()
+        subentry = self._get_reconfigure_subentry()
+        slot = int(subentry.data[CONF_SLOT])
+        address: str = entry.data[CONF_ADDRESS]
+        await async_wait_for_wake(self.hass, address)
+        async with async_open_session(self.hass, address, self._model()) as session:
+            await session.set_time(dt_util.now())
+            # Consent releases the slot's stored readings (§3).
+            await session.subscribe_readings()
+            await session.consent(slot, int(subentry.data[CONF_CONSENT_CODE]))
+            # The scale user's entities exist: process them now, so a failed
+            # write doesn't lose them.
+            entry.runtime_data.async_process_readings(
+                slot, await session.collect_readings()
+            )
+            await session.write_profile(self._new_profile)
+
     async def async_step_failed(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
@@ -290,8 +389,13 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
     def _model(self) -> ScaleModel:
         return model_by_name(self._get_entry().data[CONF_MODEL])
 
-    def _validate_identity(self, user_input: dict[str, Any]) -> dict[str, str]:
-        """Resolve the name and the person; return form errors."""
+    def _validate_identity(
+        self, user_input: dict[str, Any], own: ConfigSubentry | None = None
+    ) -> dict[str, str]:
+        """Resolve the name and the person; return form errors.
+
+        `own` is the scale user being reconfigured: its name is no conflict.
+        """
         person = user_input.get(CONF_PERSON) or None
         name = (user_input.get(CONF_NAME) or "").strip()
         if not name and person and (state := self.hass.states.get(person)):
@@ -299,8 +403,12 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
         if not name:
             return {"base": "name_required"}
 
-        subentries = self._get_entry().subentries.values()
-        if any(s.title.casefold() == name.casefold() for s in subentries):
+        others = [
+            s
+            for s in self._get_entry().subentries.values()
+            if own is None or s.subentry_id != own.subentry_id
+        ]
+        if any(s.title.casefold() == name.casefold() for s in others):
             return {CONF_NAME: "name_in_use"}
 
         self._name = name
@@ -371,6 +479,36 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
                 # Teaching (#9) plugs in here, while the new scale user is consented.
                 pass
         return created
+
+
+def _profile_fields() -> dict[probatio.Marker, Any]:
+    """The profile fields of the create and reconfigure forms."""
+    return {
+        probatio.Required(PROFILE_BIRTH_DATE): DateSelector(),
+        probatio.Required(PROFILE_HEIGHT_CM): NumberSelector(
+            NumberSelectorConfig(
+                min=MIN_HEIGHT_CM,
+                max=MAX_HEIGHT_CM,
+                step=1,
+                unit_of_measurement="cm",
+                mode=NumberSelectorMode.BOX,
+            )
+        ),
+        probatio.Required(PROFILE_GENDER): SelectSelector(
+            SelectSelectorConfig(
+                options=[str(g) for g in Gender],
+                translation_key=PROFILE_GENDER,
+                mode=SelectSelectorMode.LIST,
+            )
+        ),
+        probatio.Required(PROFILE_ACTIVITY_LEVEL): SelectSelector(
+            SelectSelectorConfig(
+                options=[str(level) for level in range(1, 6)],
+                translation_key=PROFILE_ACTIVITY_LEVEL,
+                mode=SelectSelectorMode.DROPDOWN,
+            )
+        ),
+    }
 
 
 def _failure_reason(err: Exception) -> str:
