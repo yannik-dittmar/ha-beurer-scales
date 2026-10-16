@@ -11,7 +11,7 @@ scheduled relative to the wake's start and dropped if the wake ends first.
 import asyncio
 from collections.abc import Callable
 
-from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
+from homeassistant.core import HomeAssistant, callback
 
 # Without an advertisement for this long the scale is asleep again. A BF450
 # advertises several times a second while awake.
@@ -27,7 +27,6 @@ class Wake:
         """Start a wake now."""
         self._hass = hass
         self.started = hass.loop.time()
-        self.ended = False
         self._timers: set[asyncio.TimerHandle] = set()
 
     @property
@@ -43,7 +42,7 @@ class Wake:
     @callback
     def async_call_at(
         self, seconds_since_start: float, action: Callable[[], None]
-    ) -> CALLBACK_TYPE:
+    ) -> None:
         """Run `action` once the wake is that old, unless it has ended by then."""
 
         def run() -> None:
@@ -53,15 +52,8 @@ class Wake:
         timer = self._hass.loop.call_at(self.started + seconds_since_start, run)
         self._timers.add(timer)
 
-        def cancel() -> None:
-            timer.cancel()
-            self._timers.discard(timer)
-
-        return cancel
-
     @callback
     def _async_end(self) -> None:
-        self.ended = True
         for timer in self._timers:
             timer.cancel()
         self._timers.clear()
