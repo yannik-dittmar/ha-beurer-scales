@@ -1,8 +1,6 @@
 """The scale session, run directly against the fake scale (no Home Assistant)."""
 
-from collections.abc import Iterator
 from datetime import date, datetime
-from unittest.mock import patch
 
 import pytest
 
@@ -21,15 +19,10 @@ from .fake_scale import FakeScale
 
 
 @pytest.fixture
-def scale() -> Iterator[FakeScale]:
+def scale(fake_scale: FakeScale) -> FakeScale:
     """An awake BF450 that the session connects to."""
-    scale = FakeScale()
-    scale.wake()
-    with patch(
-        "custom_components.beurer_scales.protocol.session.establish_connection",
-        scale.establish_connection,
-    ):
-        yield scale
+    fake_scale.wake()
+    return fake_scale
 
 
 async def test_user_list_holds_every_scale_user(scale: FakeScale) -> None:
@@ -147,17 +140,10 @@ async def test_the_whole_session_is_capped(scale: FakeScale) -> None:
     assert not scale.connected
 
 
-async def test_a_sleeping_scale_cannot_be_reached() -> None:
+async def test_a_sleeping_scale_cannot_be_reached(fake_scale: FakeScale) -> None:
     """Connecting to a scale that isn't awake raises ScaleConnectionError."""
-    scale = FakeScale()
-    with (
-        patch(
-            "custom_components.beurer_scales.protocol.session.establish_connection",
-            scale.establish_connection,
-        ),
-        pytest.raises(ScaleConnectionError),
-    ):
-        async with open_session(scale.ble_device, BF450):
+    with pytest.raises(ScaleConnectionError):
+        async with open_session(fake_scale.ble_device, BF450):
             pass
 
 

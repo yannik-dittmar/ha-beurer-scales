@@ -1,9 +1,7 @@
 """Creating and deleting scale users through the scale session (no Home Assistant)."""
 
 import asyncio
-from collections.abc import Iterator
 from datetime import date
-from unittest.mock import patch
 
 import pytest
 
@@ -25,15 +23,10 @@ PROFILE = Profile(
 
 
 @pytest.fixture
-def scale() -> Iterator[FakeScale]:
+def scale(fake_scale: FakeScale) -> FakeScale:
     """An awake BF450 that the session connects to."""
-    scale = FakeScale()
-    scale.wake()
-    with patch(
-        "custom_components.beurer_scales.protocol.session.establish_connection",
-        scale.establish_connection,
-    ):
-        yield scale
+    fake_scale.wake()
+    return fake_scale
 
 
 async def test_register_takes_the_lowest_free_slot(scale: FakeScale) -> None:

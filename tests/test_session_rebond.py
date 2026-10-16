@@ -1,8 +1,5 @@
 """Renewing the bond after a factory reset (protocol doc §4), without HA."""
 
-from collections.abc import Iterator
-from unittest.mock import patch
-
 import pytest
 
 from custom_components.beurer_scales.protocol.errors import ScaleConnectionError
@@ -13,15 +10,10 @@ from .fake_scale import FakeScale
 
 
 @pytest.fixture
-def scale() -> Iterator[FakeScale]:
+def scale(fake_scale: FakeScale) -> FakeScale:
     """An awake BF450 that the session connects to."""
-    scale = FakeScale()
-    scale.wake()
-    with patch(
-        "custom_components.beurer_scales.protocol.session.establish_connection",
-        scale.establish_connection,
-    ):
-        yield scale
+    fake_scale.wake()
+    return fake_scale
 
 
 async def test_a_factory_reset_scale_lists_no_users(scale: FakeScale) -> None:

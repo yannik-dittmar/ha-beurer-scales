@@ -1,8 +1,6 @@
 """Teaching a new scale user its weight, run directly against the fake scale (no HA)."""
 
 import asyncio
-from collections.abc import Iterator
-from unittest.mock import patch
 
 import pytest
 
@@ -19,16 +17,11 @@ TIMEOUT = 0.1
 
 
 @pytest.fixture
-def scale() -> Iterator[FakeScale]:
+def scale(fake_scale: FakeScale) -> FakeScale:
     """An awake BF450 with a consentable scale user in slot 2."""
-    scale = FakeScale()
-    scale.add_user(slot=2, consent_code=4321)
-    scale.wake()
-    with patch(
-        "custom_components.beurer_scales.protocol.session.establish_connection",
-        scale.establish_connection,
-    ):
-        yield scale
+    fake_scale.add_user(slot=2, consent_code=4321)
+    fake_scale.wake()
+    return fake_scale
 
 
 async def test_waiting_for_a_live_reading_returns_it_once_the_scale_is_done(

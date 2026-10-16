@@ -2,8 +2,8 @@
 
 `FakeScale.establish_connection` stands in for `bleak_retry_connector.
 establish_connection` and returns a `FakeBleakClient` that behaves like a BF450 at
-GATT level (protocol doc §9). Nothing here imports Home Assistant, so protocol
-tests use it directly; HA tests patch it in (see `conftest.fake_scale`).
+GATT level (protocol doc §9). Nothing here imports Home Assistant;
+`conftest.fake_scale` patches it in, for protocol and HA tests alike.
 
 The fake keeps its own GATT map and frame encoders, taken from the captures in
 §9, so it is an independent source of truth for the code under test.

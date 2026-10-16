@@ -4,9 +4,7 @@ The fake scale uses the BF450 numbering (FFF1/FFF2), which the BF500 and the
 Wi-Fi BF880 share.
 """
 
-from collections.abc import Iterator
 from datetime import date, datetime
-from unittest.mock import patch
 
 import pytest
 
@@ -23,15 +21,10 @@ PROFILE = Profile(
 
 
 @pytest.fixture
-def scale() -> Iterator[FakeScale]:
+def scale(fake_scale: FakeScale) -> FakeScale:
     """An awake scale that the session connects to."""
-    scale = FakeScale()
-    scale.wake()
-    with patch(
-        "custom_components.beurer_scales.protocol.session.establish_connection",
-        scale.establish_connection,
-    ):
-        yield scale
+    fake_scale.wake()
+    return fake_scale
 
 
 def written(scale: FakeScale, uuid: str) -> list[bytes]:

@@ -1,8 +1,6 @@
 """Syncing a scale user's readings, run directly against the fake scale (no HA)."""
 
-from collections.abc import Iterator
 from datetime import datetime
-from unittest.mock import patch
 
 import pytest
 
@@ -26,15 +24,10 @@ NOW = datetime(2024, 3, 10, 8, 0, 0)
 
 
 @pytest.fixture
-def scale() -> Iterator[FakeScale]:
+def scale(fake_scale: FakeScale) -> FakeScale:
     """An awake BF450 that the session connects to."""
-    scale = FakeScale()
-    scale.wake()
-    with patch(
-        "custom_components.beurer_scales.protocol.session.establish_connection",
-        scale.establish_connection,
-    ):
-        yield scale
+    fake_scale.wake()
+    return fake_scale
 
 
 def pending_slots(scale: FakeScale) -> bytes:
