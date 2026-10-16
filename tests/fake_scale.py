@@ -11,8 +11,8 @@ The fake keeps its own GATT map and frame encoders, taken from the captures in
 Implemented so far: waking and sleeping, the required bond, setting the time,
 the user list, consent, stored and live readings, the pending-slot list in the
 advertisement, the battery level, registering and deleting scale users, profile
-writes, and injected write failures. Extend it as later behaviour needs it
-(factory reset).
+writes, injected write failures, and a factory reset with the stale bond it
+leaves behind (renewed by unpair + pair).
 """
 
 import asyncio
@@ -121,12 +121,25 @@ class FakeScale:
     stalled: bool = False
     # Slots whose scale user was deleted over a live connection (UCP 03).
     deleted_while_connected: list[int] = field(default_factory=list)
+    # After a factory reset the scale has lost its bond keys while the host
+    # still holds a bond (§4); unpair + pair renews it.
+    bond_stale: bool = False
+    # How often a client renewed the bond (unpair, then pair).
+    rebonds: int = 0
+    # Pairing on an existing connection fails.
+    pairing_fails: bool = False
 
     def add_user(self, slot: int, consent_code: int, **profile: Any) -> FakeScaleUser:
         """Store a scale user in a slot."""
         user = FakeScaleUser(consent_code=consent_code, **profile)
         self.users[slot] = user
         return user
+
+    def factory_reset(self) -> None:
+        """Wipe every scale user (FFF7 `00`); the scale forgets its bond (§4)."""
+        self.users.clear()
+        self.bond_stale = True
+        self.awake = False
 
     def wake(self) -> None:
         """Someone stepped on the scale: it advertises and accepts connections."""
@@ -191,6 +204,7 @@ class FakeBleakClient:
         self._connected = True
         self._subscriptions: dict[str, NotifyCallback] = {}
         self.consented_slot: int | None = None
+        self._unpaired = False
 
     @property
     def is_connected(self) -> bool:
@@ -239,6 +253,24 @@ class FakeBleakClient:
             self._write_profile(uuid, data)
         else:
             raise BleakError(f"Write to unsupported characteristic {uuid}")
+
+    async def unpair(self) -> bool:
+        """Remove the host's bond with the scale."""
+        self._check_link()
+        self._unpaired = True
+        return True
+
+    async def pair(self, *args: Any, **kwargs: Any) -> bool:
+        """Bond with the scale again."""
+        if not self._connected:
+            raise BleakError("Not connected")
+        if self._scale.pairing_fails:
+            raise BleakError("Pairing failed")
+        if self._unpaired:
+            self._unpaired = False
+            self._scale.bond_stale = False
+            self._scale.rebonds += 1
+        return True
 
     async def disconnect(self) -> bool:
         """Close the link. The scale goes back to sleep about 1 s later."""

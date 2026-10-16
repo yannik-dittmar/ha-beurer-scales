@@ -7,11 +7,13 @@ failure, or cancellation, while still consented and connected (ADR 0003).
 
 import logging
 import random
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from enum import Enum
 
 from .errors import NoFreeSlot, ScaleError
+from .frames import UserListEntry
 from .profile import Profile
 from .session import ScaleSession
 
@@ -65,3 +67,27 @@ async def create_scale_user(
                 "Couldn't delete the new scale user in slot %s: %s", slot, err
             )
         raise
+
+
+class SlotState(Enum):
+    """What the user list says about a slot."""
+
+    # The scale user is still there: after a rejected consent, the code is wrong.
+    PRESENT = "present"
+    # Other scale users remain, but this slot is empty.
+    DELETED = "deleted"
+    # The list is empty: the scale was factory-reset.
+    FACTORY_RESET = "factory_reset"
+
+
+def explain_slot(slot: int, users: Sequence[UserListEntry]) -> SlotState:
+    """Tell why a slot can't be consented, from the user list (§9.4b).
+
+    The scale answers a wrong code, a missing slot and a deleted scale user alike;
+    the user list, which needs no consent, tells them apart.
+    """
+    if not users:
+        return SlotState.FACTORY_RESET
+    if any(user.slot == slot for user in users):
+        return SlotState.PRESENT
+    return SlotState.DELETED

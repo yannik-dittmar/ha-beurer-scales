@@ -98,6 +98,14 @@ class GattClient(Protocol):
         """Read a characteristic."""
         ...
 
+    async def unpair(self) -> Any:
+        """Remove the bond with the device."""
+        ...
+
+    async def pair(self) -> Any:
+        """Bond with the device."""
+        ...
+
 
 @dataclass(frozen=True, slots=True)
 class SyncResult:
@@ -312,6 +320,20 @@ class ScaleSession:
         except BleakError as err:
             raise ScaleConnectionError(f"read battery: {err}") from err
         return data[0] if len(data) == 1 and data[0] <= 100 else None
+
+    async def rebond(self) -> None:
+        """Replace the bond: unpair, then pair again.
+
+        A factory reset makes the scale forget its bond keys while the host
+        keeps its own (§4). Do this last: the link may not survive it.
+        """
+        try:
+            await self._client.unpair()
+            await self._client.pair()
+        except NotImplementedError as err:
+            raise PairingUnsupported(str(err)) from err
+        except BleakError as err:
+            raise ScaleConnectionError(f"rebond: {err}") from err
 
     async def disconnect(self) -> None:
         """Close the connection. Never raises."""
