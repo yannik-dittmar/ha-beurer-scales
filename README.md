@@ -62,7 +62,7 @@ Use **Reconfigure** on the scale user. Changing only the name or the person take
 
 ### Remove a scale user
 
-Delete the scale user's subentry. Its device and sensors disappear from Home Assistant right away. The scale user itself is deleted from the scale at the next wake, after the weigh-in is final, which frees the slot.
+Delete the scale user's subentry. Its device and sensors disappear from Home Assistant right away. The scale user itself is deleted from the scale at the next wake, after the weigh-in is final, which frees the slot. If the scale refuses that deletion in the connection that synced someone's weigh-in, Home Assistant tries again at a wake where nobody it manages has new readings.
 
 ## Everyday weighing
 
