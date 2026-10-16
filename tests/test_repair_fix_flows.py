@@ -19,7 +19,7 @@ from custom_components.beurer_scales.const import DOMAIN
 
 from .conftest import SCALE_ADDRESS, wake_scale
 from .fake_scale import FakeScale
-from .test_repairs import (
+from .test_scale_user_repairs import (
     anna_id,
     scale_issues,
     setup_anna,

@@ -1,9 +1,14 @@
-"""Repair issues of the Beurer Scales integration and their fix flows.
+"""Repair issues and warnings the integration raises about a scale (design §6).
 
-Scale user issues (design §6): a scale user's consent failed and the user list
-told why. Each one is keyed by the scale user's subentry, blocks that scale
-user's syncs while it is open, and is fixed through the scale user subentry
-flows. It is cleared once the scale user syncs again or is removed.
+Each issue type has a create and a delete helper here; the coordinator calls them.
+Issue ids carry the config entry id (scale issues) or the subentry id (scale user
+issues), so every scale and scale user has its own issues.
+
+Scale user issues (wrong consent code, scale user deleted, factory reset): a
+scale user's consent failed and the user list told why. Each one blocks that
+scale user's syncs while it is open, is fixed through the scale user subentry
+flows (`async_create_fix_flow`, the HA repairs platform hook), and is cleared
+once the scale user syncs again or is removed.
 """
 
 from enum import StrEnum
@@ -20,6 +25,63 @@ from .const import (
     SOURCE_REPAIR_CREATE,
     SUBENTRY_SCALE_USER,
 )
+
+ISSUE_PAIRING_IMPOSSIBLE = "pairing_impossible"
+ISSUE_UNSUPPORTED_UNIT = "unsupported_unit"
+
+
+def _issue_id(kind: str, entry: ConfigEntry) -> str:
+    return f"{kind}_{entry.entry_id}"
+
+
+@callback
+def async_create_pairing_issue(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """The Bluetooth path HA picked can't bond with the scale (ADR 0002).
+
+    Nothing in HA can fix this: the user adds an ESPHome proxy or makes the host
+    adapter pairable, and the issue clears at the next successful sync.
+    """
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        _issue_id("pairing", entry),
+        is_fixable=False,
+        severity=ir.IssueSeverity.ERROR,
+        translation_key=ISSUE_PAIRING_IMPOSSIBLE,
+        translation_placeholders={"name": entry.title},
+        learn_more_url="https://esphome.io/components/bluetooth_proxy/",
+    )
+
+
+@callback
+def async_delete_pairing_issue(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """A sync bonded and succeeded."""
+    ir.async_delete_issue(hass, DOMAIN, _issue_id("pairing", entry))
+
+
+@callback
+def async_create_unit_issue(hass: HomeAssistant, entry: ConfigEntry, unit: str) -> None:
+    """The scale reported weights in `unit`, not kg; they were not used.
+
+    Advisory only: v1 never writes scale settings, so the user sets the scale's
+    display back to kg (design §6).
+    """
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        _issue_id("unit", entry),
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key=ISSUE_UNSUPPORTED_UNIT,
+        translation_placeholders={"name": entry.title, "unit": unit},
+    )
+
+
+@callback
+def async_delete_unit_issue(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """The scale reports kg again."""
+    ir.async_delete_issue(hass, DOMAIN, _issue_id("unit", entry))
+
 
 # --- Scale user issues: wrong code, deleted, factory reset (#12) ---
 

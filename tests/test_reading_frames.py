@@ -6,6 +6,7 @@ import pytest
 
 from custom_components.beurer_scales.protocol.frames import (
     FrameError,
+    WeightUnit,
     decode_pending_slots,
     decode_weight_frame,
 )
@@ -49,3 +50,20 @@ def test_malformed_weight_frames_are_rejected(frame: bytes) -> None:
     """A weight frame that isn't 15 bytes raises FrameError (§9.4)."""
     with pytest.raises(FrameError):
         decode_weight_frame(frame)
+
+
+def test_the_bf450_weight_frame_is_in_kg() -> None:
+    """The BF450 sends flags 0x02: bit 0 clear means SI units (§5.1)."""
+    weight = decode_weight_frame(frames.OFFLINE_WEIGHT_SLOT_2)
+
+    assert weight.unit is WeightUnit.KG
+
+
+def test_a_weight_frame_with_the_imperial_flag_is_in_pounds() -> None:
+    """Flags bit 0 set means imperial units (0x2A9D spec; unverified on BF450, V5)."""
+    frame = (
+        bytes([frames.OFFLINE_WEIGHT_SLOT_2[0] | 0x01])
+        + frames.OFFLINE_WEIGHT_SLOT_2[1:]
+    )
+
+    assert decode_weight_frame(frame).unit is WeightUnit.LB

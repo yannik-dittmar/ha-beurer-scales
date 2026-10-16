@@ -5,10 +5,17 @@ from datetime import datetime
 from homeassistant.components.sensor import (
     RestoreSensor,
     SensorDeviceClass,
+    SensorEntityDescription,
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigSubentry
-from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfMass
+from homeassistant.const import (
+    PERCENTAGE,
+    EntityCategory,
+    UnitOfEnergy,
+    UnitOfMass,
+    UnitOfTime,
+)
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -16,7 +23,8 @@ from homeassistant.util import dt as dt_util
 
 from .const import CONF_SLOT, DOMAIN, SUBENTRY_SCALE_USER
 from .coordinator import BeurerConfigEntry, ScaleCoordinator
-from .protocol.readings import Reading
+from .protocol.metrics import Metric
+from .protocol.readings import Reading, reading_metrics
 
 
 async def async_setup_entry(
@@ -34,6 +42,10 @@ async def async_setup_entry(
             [
                 WeightSensor(coordinator, subentry),
                 LastReadingSensor(coordinator, subentry),
+                *(
+                    MetricSensor(coordinator, subentry, METRIC_SENSORS[metric])
+                    for metric in coordinator.model.metrics
+                ),
             ],
             config_subentry_id=subentry.subentry_id,
         )
@@ -155,3 +167,68 @@ class LastReadingSensor(_ScaleUserSensor):
             return None
         # The scale's clock runs on HA's local time, set at every sync.
         return reading.timestamp.replace(tzinfo=dt_util.get_default_time_zone())
+
+
+def _mass(metric: Metric, *, enabled: bool = True) -> SensorEntityDescription:
+    return SensorEntityDescription(
+        key=metric,
+        translation_key=metric,
+        device_class=SensorDeviceClass.WEIGHT,
+        native_unit_of_measurement=UnitOfMass.KILOGRAMS,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=1,
+        entity_registry_enabled_default=enabled,
+    )
+
+
+def _plain(
+    metric: Metric, unit: str | None, precision: int, *, enabled: bool = True
+) -> SensorEntityDescription:
+    # Percentages and kcal have no device class: ENERGY would require `total`.
+    return SensorEntityDescription(
+        key=metric,
+        translation_key=metric,
+        native_unit_of_measurement=unit,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=precision,
+        entity_registry_enabled_default=enabled,
+    )
+
+
+METRIC_SENSORS: dict[Metric, SensorEntityDescription] = {
+    Metric.BMI: _plain(Metric.BMI, None, 1),
+    Metric.BODY_FAT: _plain(Metric.BODY_FAT, PERCENTAGE, 1),
+    Metric.BODY_WATER: _plain(Metric.BODY_WATER, PERCENTAGE, 1),
+    Metric.MUSCLE: _plain(Metric.MUSCLE, PERCENTAGE, 1),
+    Metric.BONE_MASS: _mass(Metric.BONE_MASS),
+    Metric.BMR: _plain(Metric.BMR, UnitOfEnergy.KILO_CALORIE, 0),
+    Metric.AMR: _plain(Metric.AMR, UnitOfEnergy.KILO_CALORIE, 0),
+    Metric.VISCERAL_FAT: _plain(Metric.VISCERAL_FAT, None, 0),
+    Metric.METABOLIC_AGE: _plain(Metric.METABOLIC_AGE, UnitOfTime.YEARS, 0),
+    Metric.LEAN_BODY_MASS: _mass(Metric.LEAN_BODY_MASS),
+    Metric.PROTEIN_MASS: _mass(Metric.PROTEIN_MASS),
+    Metric.TOTAL_MUSCLE_MASS: _mass(Metric.TOTAL_MUSCLE_MASS),
+    Metric.SOFT_LEAN_MASS: _mass(Metric.SOFT_LEAN_MASS),
+    Metric.SUBCUTANEOUS_FAT: _plain(Metric.SUBCUTANEOUS_FAT, PERCENTAGE, 1),
+    Metric.IDEAL_WEIGHT: _mass(Metric.IDEAL_WEIGHT, enabled=False),
+    Metric.IMPEDANCE: _plain(Metric.IMPEDANCE, "Ω", 0, enabled=False),
+}
+
+
+class MetricSensor(_ScaleUserSensor):
+    """One body-composition metric of the scale user, from the model's metric set."""
+
+    def __init__(
+        self,
+        coordinator: ScaleCoordinator,
+        subentry: ConfigSubentry,
+        description: SensorEntityDescription,
+    ) -> None:
+        """Create a metric sensor of a scale user."""
+        self.entity_description = description
+        self._metric = Metric(description.key)
+        super().__init__(coordinator, subentry, description.key)
+
+    def _value(self, reading: Reading) -> float | None:
+        # A reading without this metric (e.g. no bare feet) leaves it unknown.
+        return reading_metrics(reading, self.coordinator.model).get(self._metric)
