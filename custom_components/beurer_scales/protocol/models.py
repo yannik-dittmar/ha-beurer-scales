@@ -6,6 +6,7 @@ from dataclasses import dataclass
 # The BF450 advertises the Weight Scale service (0x181D) byte-swapped, as 0x1D18;
 # its service data holds the pending-slot list (protocol doc §2).
 SWAPPED_WEIGHT_SCALE_UUID = "00001d18-0000-1000-8000-00805f9b34fb"
+WEIGHT_SCALE_SERVICE_UUID = "0000181d-0000-1000-8000-00805f9b34fb"
 
 
 def uuid16(short: int) -> str:

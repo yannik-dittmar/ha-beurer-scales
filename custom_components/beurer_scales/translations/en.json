@@ -70,5 +70,15 @@
         "cannot_connect": "Home Assistant couldn't talk to the scale. Make sure it is in range, then try again."
       }
     }
+  },
+  "entity": {
+    "sensor": {
+      "last_sync": {
+        "name": "Last sync"
+      },
+      "last_reading": {
+        "name": "Last reading"
+      }
+    }
   }
 }

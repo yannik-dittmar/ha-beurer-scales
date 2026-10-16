@@ -1,14 +1,16 @@
 """The Beurer Scales integration."""
 
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_ADDRESS
+from homeassistant.const import CONF_ADDRESS, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
 from .const import CONF_MODEL, CONF_SLOT, DOMAIN, MANUFACTURER, SUBENTRY_SCALE_USER
+from .coordinator import BeurerConfigEntry, ScaleCoordinator
+
+PLATFORMS = [Platform.SENSOR]
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_setup_entry(hass: HomeAssistant, entry: BeurerConfigEntry) -> bool:
     """Set up a scale and its scale users. This never connects to the scale."""
     address: str = entry.data[CONF_ADDRESS]
     device_registry = dr.async_get(hass)
@@ -33,15 +35,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             name=subentry.title,
             via_device_id=scale_device.id,
         )
+    entry.runtime_data = ScaleCoordinator(hass, entry)
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    entry.async_on_unload(entry.runtime_data.async_start())
     entry.async_on_unload(entry.add_update_listener(_async_reload))
     return True
 
 
-async def _async_reload(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload when scale users are added or removed."""
-    hass.config_entries.async_schedule_reload(entry.entry_id)
+async def _async_reload(hass: HomeAssistant, entry: BeurerConfigEntry) -> None:
+    """Reload when scale users are added, changed or removed.
+
+    Other updates, such as HA recording the discovery key at an advertisement,
+    must not reload: that would cut off a sync in progress.
+    """
+    if dict(entry.subentries) != entry.runtime_data.subentries_at_setup:
+        hass.config_entries.async_schedule_reload(entry.entry_id)
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_unload_entry(hass: HomeAssistant, entry: BeurerConfigEntry) -> bool:
     """Unload a scale."""
-    return True
+    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

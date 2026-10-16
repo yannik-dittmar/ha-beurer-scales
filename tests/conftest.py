@@ -45,6 +45,14 @@ def auto_enable_bluetooth(
     """
 
 
+@pytest.fixture(autouse=True)
+def fast_quiet_period(monkeypatch: pytest.MonkeyPatch) -> None:
+    """End reading collection quickly: the fake scale sends without delays."""
+    monkeypatch.setattr(
+        "custom_components.beurer_scales.protocol.session.QUIET_PERIOD", 0.02
+    )
+
+
 @pytest.fixture
 def configured_scale(hass: HomeAssistant) -> MockConfigEntry:
     """A BF450 that is already set up."""
