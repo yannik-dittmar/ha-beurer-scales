@@ -10,6 +10,10 @@ A Home Assistant integration that collects body-weight readings from Beurer Blue
 One physical Beurer bathroom scale, identified by its Bluetooth address.
 _Avoid_: device (overloaded with HA devices)
 
+**Scale model**:
+The product type of a scale, such as the BF450. It decides how the scale is recognised, its protocol details and which metrics it measures.
+_Avoid_: type, variant
+
 **Slot**:
 A numbered position (1–8 on the BF450) on the scale that can hold one scale user.
 _Avoid_: user index, user ID

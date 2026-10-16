@@ -9,6 +9,9 @@
         "description": "Choose a Beurer scale that Home Assistant has seen nearby. Step on the scale to wake it if it isn't listed.",
         "data": {
           "address": "Scale"
+        },
+        "data_description": {
+          "address": "Scales Home Assistant has heard recently that aren't set up yet, with their Bluetooth address."
         }
       }
     },
