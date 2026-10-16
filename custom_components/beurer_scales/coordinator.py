@@ -29,8 +29,8 @@ from homeassistant.util import dt as dt_util
 from .connection import async_open_session
 from .discards import async_notify_discarded
 from .const import CONF_CONSENT_CODE, CONF_MODEL, CONF_SLOT, DOMAIN, SUBENTRY_SCALE_USER
-from .protocol.errors import ScaleError
-from .protocol.frames import decode_pending_slots
+from .protocol.errors import PairingFailed, PairingUnsupported, ScaleError
+from .protocol.frames import WeightUnit, decode_pending_slots
 from .protocol.models import (
     SWAPPED_WEIGHT_SCALE_UUID,
     WEIGHT_SCALE_SERVICE_UUID,
@@ -39,6 +39,12 @@ from .protocol.models import (
 from .protocol.policy import ReadingPolicy
 from .protocol.readings import Reading
 from .protocol.session import ScaleSession
+from .repairs import (
+    async_create_pairing_issue,
+    async_create_unit_issue,
+    async_delete_pairing_issue,
+    async_delete_unit_issue,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -186,7 +192,7 @@ class ScaleCoordinator:
         `sync_start` (aware, default now) is when the sync that collected the
         readings began; readings much older than it are backlog (ADR 0005).
         """
-        readings = [r for r in readings if r.slot == slot]
+        readings = self._async_kg_only(r for r in readings if r.slot == slot)
         if not readings:
             return
         start = dt_util.as_local(sync_start or dt_util.now()).replace(tzinfo=None)
@@ -207,6 +213,26 @@ class ScaleCoordinator:
             return
         self._latest[slot] = result.fresh[-1]
         self._async_update_listeners()
+
+    @callback
+    def _async_kg_only(self, readings: Iterable[Reading]) -> list[Reading]:
+        """Drop readings in another unit than kg and warn about them.
+
+        v1 never writes scale settings, so the user switches the display back.
+        """
+        readings = list(readings)
+        kg = [r for r in readings if r.unit is WeightUnit.KG]
+        if other := [r for r in readings if r.unit is not WeightUnit.KG]:
+            _LOGGER.warning(
+                "Discarding %s reading(s) of %s in %s; only kg is supported",
+                len(other),
+                self.address,
+                other[-1].unit,
+            )
+            async_create_unit_issue(self.hass, self.entry, str(other[-1].unit))
+        elif kg:
+            async_delete_unit_issue(self.hass, self.entry)
+        return kg
 
     def _managed_slots(self) -> dict[int, ConfigSubentry]:
         return {
@@ -283,6 +309,7 @@ class ScaleCoordinator:
                 result = await session.sync(
                     slot, int(first.data[CONF_CONSENT_CODE]), sync_start
                 )
+                async_delete_pairing_issue(self.hass, self.entry)
                 self.battery_percent = result.battery_percent
                 self.last_sync = dt_util.utcnow()
                 self._async_update_listeners()
@@ -291,6 +318,8 @@ class ScaleCoordinator:
                 await self._async_drain(session, others, sync_start)
         except ScaleError as err:
             _LOGGER.warning("Syncing slot %s of %s failed: %r", slot, self.address, err)
+            if isinstance(err, PairingUnsupported | PairingFailed):
+                async_create_pairing_issue(self.hass, self.entry)
             self._retry_after = self.hass.loop.time() + RETRY_DELAY
         finally:
             self._syncing = False

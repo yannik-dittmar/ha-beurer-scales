@@ -40,6 +40,7 @@ from .coordinator import async_hand_over_readings
 from .protocol.errors import (
     ConsentRejected,
     NoFreeSlot,
+    PairingFailed,
     PairingUnsupported,
     ScaleError,
 )
@@ -377,6 +378,6 @@ def _failure_reason(err: Exception) -> str:
     """The abort reason for a failure that ends the flow."""
     if isinstance(err, WakeTimeout):
         return "wake_timeout"
-    if isinstance(err, PairingUnsupported):
+    if isinstance(err, PairingUnsupported | PairingFailed):
         return "pairing_unsupported"
     return "cannot_connect"

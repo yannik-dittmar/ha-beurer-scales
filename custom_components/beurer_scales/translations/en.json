@@ -165,5 +165,15 @@
         "5": "5 - Very high"
       }
     }
+  },
+  "issues": {
+    "pairing_impossible": {
+      "title": "{name} can't pair through this Bluetooth path",
+      "description": "Home Assistant reached the scale {name}, but the Bluetooth adapter or proxy it used couldn't pair (bond) with it. The scale only stays connected when it is paired, so readings aren't synced.\n\nTo fix it, do one of these:\n- Add an ESPHome Bluetooth proxy on an ESP32 near the scale. ESPHome proxies pair with the scale automatically.\n- If Home Assistant uses its own Bluetooth adapter, make the host adapter pairable. A local adapter on Home Assistant OS usually can't pair.\n\nThis issue goes away after the next successful sync."
+    },
+    "unsupported_unit": {
+      "title": "{name} reports weights in {unit}",
+      "description": "The scale {name} sent readings in {unit} instead of kg. Home Assistant only supports kg and didn't record these readings, so your sensors don't show wrong values.\n\nSet the scale's display unit back to kg, for example in the Beurer app. Home Assistant never changes the scale's settings. This warning goes away with the next reading in kg."
+    }
   }
 }
