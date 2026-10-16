@@ -93,6 +93,17 @@ def sync_order(pending: Sequence[int], leftovers: Collection[int]) -> list[int]:
     return [*reversed(fresh), *reversed(rest)]
 
 
+def subentries_snapshot(entry: ConfigEntry[Any]) -> dict[str, Any]:
+    """The scale users' titles and data, to tell whether any changed.
+
+    HA updates a subentry in place, so comparing the objects misses changes.
+    """
+    return {
+        subentry_id: (subentry.title, dict(subentry.data))
+        for subentry_id, subentry in entry.subentries.items()
+    }
+
+
 @callback
 def async_hand_over_readings(
     hass: HomeAssistant,
@@ -124,7 +135,7 @@ class ScaleCoordinator:
         self.entry = entry
         self.address: str = entry.data[CONF_ADDRESS]
         self.model = model_by_name(entry.data[CONF_MODEL])
-        self.subentries_at_setup = dict(entry.subentries)
+        self.subentries_at_setup = subentries_snapshot(entry)
         self.battery_percent: int | None = None
         self.last_sync: datetime | None = None
         self._latest: dict[int, Reading] = {}
