@@ -98,6 +98,54 @@
       },
       "last_reading": {
         "name": "Last reading"
+      },
+      "bmi": {
+        "name": "BMI"
+      },
+      "body_fat": {
+        "name": "Body fat"
+      },
+      "body_water": {
+        "name": "Body water"
+      },
+      "muscle": {
+        "name": "Muscle"
+      },
+      "bone_mass": {
+        "name": "Bone mass"
+      },
+      "bmr": {
+        "name": "Basal metabolic rate"
+      },
+      "amr": {
+        "name": "Active metabolic rate"
+      },
+      "visceral_fat": {
+        "name": "Visceral fat"
+      },
+      "metabolic_age": {
+        "name": "Metabolic age"
+      },
+      "lean_body_mass": {
+        "name": "Lean body mass"
+      },
+      "protein_mass": {
+        "name": "Protein mass"
+      },
+      "total_muscle_mass": {
+        "name": "Total muscle mass"
+      },
+      "soft_lean_mass": {
+        "name": "Soft lean mass"
+      },
+      "subcutaneous_fat": {
+        "name": "Subcutaneous fat"
+      },
+      "ideal_weight": {
+        "name": "Ideal weight"
+      },
+      "impedance": {
+        "name": "Impedance"
       }
     }
   },
