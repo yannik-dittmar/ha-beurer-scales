@@ -28,6 +28,24 @@ class Metric(StrEnum):
     SUBCUTANEOUS_FAT = "subcutaneous_fat"
     IDEAL_WEIGHT = "ideal_weight"
     IMPEDANCE = "impedance"
+    # Heart-rate frame (BF500/BF880/BF980, §5.4).
+    HEART_RATE = "heart_rate"
+    # Upper/lower body analysis 0x0008 (BF105/BF1000, §5.4).
+    UPPER_BODY_FAT = "upper_body_fat"
+    LOWER_BODY_FAT = "lower_body_fat"
+    UPPER_BODY_MUSCLE = "upper_body_muscle"
+    LOWER_BODY_MUSCLE = "lower_body_muscle"
+    # Segmental fat 0x0009 and muscle 0x000A analysis (BF1000, §5.4).
+    LEFT_ARM_FAT = "left_arm_fat"
+    RIGHT_ARM_FAT = "right_arm_fat"
+    LEFT_LEG_FAT = "left_leg_fat"
+    RIGHT_LEG_FAT = "right_leg_fat"
+    TORSO_FAT = "torso_fat"
+    LEFT_ARM_MUSCLE = "left_arm_muscle"
+    RIGHT_ARM_MUSCLE = "right_arm_muscle"
+    LEFT_LEG_MUSCLE = "left_leg_muscle"
+    RIGHT_LEG_MUSCLE = "right_leg_muscle"
+    TORSO_MUSCLE = "torso_muscle"
 
 
 # The app converts the scale's kJ to kcal with this factor (§5.2).
@@ -136,3 +154,81 @@ def decode_custom2_frame(frame: bytes) -> Custom2Frame:
         bone_mass_kg=_scaled(_uint16(frame, 12), 0.005, 3),
         body_water_percent=_scaled(_uint16(frame, 14), 0.1, 1),
     )
+
+
+# --- Frames of other BF600-family models (§5.4) ---
+#
+# Decoded from the app's parsers only; no model sending them has been tested.
+# They decode straight to metrics. Fat and muscle values are × 0.1 (assumed %).
+
+_SEGMENT_BODY_METRICS = (
+    Metric.UPPER_BODY_FAT,
+    Metric.LOWER_BODY_FAT,
+    Metric.UPPER_BODY_MUSCLE,
+    Metric.LOWER_BODY_MUSCLE,
+)
+_SEGMENT_FAT_LIMBS = (
+    Metric.LEFT_ARM_FAT,
+    Metric.RIGHT_ARM_FAT,
+    Metric.LEFT_LEG_FAT,
+    Metric.RIGHT_LEG_FAT,
+    Metric.TORSO_FAT,
+)
+_SEGMENT_MUSCLE_METRICS = (
+    Metric.LEFT_ARM_MUSCLE,
+    Metric.RIGHT_ARM_MUSCLE,
+    Metric.LEFT_LEG_MUSCLE,
+    Metric.RIGHT_LEG_MUSCLE,
+    Metric.TORSO_MUSCLE,
+)
+
+
+def _check_frame(name: str, frame: bytes, length: int, flags: int) -> None:
+    _check_length(name, frame, length)
+    if frame[0] != flags:
+        raise FrameError(f"{name} frame with flags {frame[0]:02x}: {frame.hex()}")
+
+
+def _tenths(
+    frame: bytes, offset: int, metrics: tuple[Metric, ...]
+) -> dict[Metric, float | None]:
+    return {
+        metric: _scaled(_uint16(frame, offset + 2 * i), 0.1, 1)
+        for i, metric in enumerate(metrics)
+    }
+
+
+def decode_segment_body_frame(frame: bytes) -> dict[Metric, float | None]:
+    """Decode the upper/lower body analysis 0x0008: 9 bytes, flags 1e."""
+    _check_frame("upper/lower body", frame, 9, 0x1E)
+    return _tenths(frame, 1, _SEGMENT_BODY_METRICS)
+
+
+def decode_segment_fat_frame(frame: bytes) -> dict[Metric, float | None]:
+    """Decode the segmental fat analysis 0x0009: 12 bytes, flags 7e.
+
+    The visceral fat is one byte, the five segments two bytes each.
+    """
+    _check_frame("segmental fat", frame, 12, 0x7E)
+    return {
+        Metric.VISCERAL_FAT: _scaled(frame[1], 0.1, 1),
+        **_tenths(frame, 2, _SEGMENT_FAT_LIMBS),
+    }
+
+
+def decode_segment_muscle_frame(frame: bytes) -> dict[Metric, float | None]:
+    """Decode the segmental muscle analysis 0x000A: 11 bytes, flags 3e."""
+    _check_frame("segmental muscle", frame, 11, 0x3E)
+    return _tenths(frame, 1, _SEGMENT_MUSCLE_METRICS)
+
+
+def decode_heart_rate_frame(frame: bytes) -> dict[Metric, float | None]:
+    """Decode the heart-rate frame on FFF5 of the BF500/BF880/BF980: 6 bytes."""
+    _check_length("heart rate", frame, 6)
+    pulse = _uint16(frame, 1)
+    metabolic_age = frame[5]
+    return {
+        Metric.HEART_RATE: pulse if pulse not in (0, 0xFF, 0xFFFF) else None,
+        Metric.VISCERAL_FAT: _scaled(_uint16(frame, 3), 0.1, 1),
+        Metric.METABOLIC_AGE: metabolic_age if 1 <= metabolic_age <= 99 else None,
+    }

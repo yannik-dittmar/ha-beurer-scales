@@ -3,14 +3,14 @@
 from dataclasses import replace
 
 from custom_components.beurer_scales.protocol.metrics import Metric
-from custom_components.beurer_scales.protocol.models import BF450, uuid16
+from custom_components.beurer_scales.protocol.models import BF450, model_by_name, uuid16
 from custom_components.beurer_scales.protocol.readings import (
     Reading,
     ReadingAssembler,
     reading_metrics,
 )
 
-from . import frames
+from . import frames, test_segment_frames
 
 
 def assemble(group: tuple[tuple[int, bytes], ...]) -> Reading:
@@ -78,3 +78,61 @@ def test_a_malformed_frame_leaves_its_metrics_out() -> None:
     assert Metric.AMR not in metrics
     assert Metric.IDEAL_WEIGHT not in metrics
     assert metrics[Metric.BMR] == 1758
+
+
+# The §9.3 weight and body composition frames, as any BF600-family model sends them.
+WEIGHT_AND_BODY = frames.READING_SLOT_2[:2]
+
+
+def test_segmental_frames_add_their_metrics() -> None:
+    """A BF1000 reading carries the upper/lower and segmental analyses (§5.4)."""
+    group = (
+        *WEIGHT_AND_BODY,
+        (0x0008, test_segment_frames.SEGMENT_BODY),
+        (0x0009, test_segment_frames.SEGMENT_FAT),
+        (0x000A, test_segment_frames.SEGMENT_MUSCLE),
+    )
+
+    metrics = reading_metrics(assemble(group), model_by_name("BF1000"))
+
+    assert metrics[Metric.BODY_FAT] == 18.4
+    assert metrics[Metric.UPPER_BODY_FAT] == 21.3
+    assert metrics[Metric.LOWER_BODY_MUSCLE] == 44.1
+    assert metrics[Metric.VISCERAL_FAT] == 8.5
+    assert metrics[Metric.TORSO_FAT] == 19.8
+    assert metrics[Metric.TORSO_MUSCLE] == 28.4
+    # Body masses are in 0.005 kg on models other than the BF450 type (§5.2).
+    assert metrics[Metric.SOFT_LEAN_MASS] == 3.03
+
+
+def test_fff5_is_a_heart_rate_frame_on_heart_rate_models() -> None:
+    """The BF500 sends a heart-rate frame on FFF5, not the BF450's custom1."""
+    group = (*WEIGHT_AND_BODY, (0xFFF5, test_segment_frames.HEART_RATE))
+
+    metrics = reading_metrics(assemble(group), model_by_name("BF500"))
+
+    assert metrics[Metric.HEART_RATE] == 72
+    assert metrics[Metric.VISCERAL_FAT] == 9.5
+    assert metrics[Metric.METABOLIC_AGE] == 41
+    assert Metric.AMR not in metrics
+
+
+def test_a_weight_only_model_has_just_the_bmi() -> None:
+    """The GS435 measures no body composition; stray frames are ignored."""
+    metrics = reading_metrics(assemble(frames.READING_SLOT_2), model_by_name("GS435"))
+
+    assert metrics == {Metric.BMI: 24.2}
+
+
+def test_a_malformed_segment_frame_leaves_its_metrics_out() -> None:
+    """A wrong segment frame drops only its own metrics."""
+    group = (
+        *WEIGHT_AND_BODY,
+        (0x0008, test_segment_frames.SEGMENT_BODY[:-1]),
+        (0x0009, test_segment_frames.SEGMENT_FAT),
+    )
+
+    metrics = reading_metrics(assemble(group), model_by_name("BF1000"))
+
+    assert Metric.UPPER_BODY_FAT not in metrics
+    assert metrics[Metric.LEFT_ARM_FAT] == 24.1
