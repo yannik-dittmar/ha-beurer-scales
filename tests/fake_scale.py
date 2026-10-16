@@ -148,6 +148,8 @@ class FakeScale:
     rebonds: int = 0
     # Pairing on an existing connection fails.
     pairing_fails: bool = False
+    # Every write the scale received: (characteristic, data, with response).
+    writes: list[tuple[str, bytes, bool | None]] = field(default_factory=list)
 
     def add_user(self, slot: int, consent_code: int, **profile: Any) -> FakeScaleUser:
         """Store a scale user in a slot."""
@@ -271,6 +273,7 @@ class FakeBleakClient:
         self._check_link()
         uuid = str(char_specifier).lower()
         data = bytes(data)
+        self._scale.writes.append((uuid, data, response))
         await self._misbehave(uuid)
         if uuid == CURRENT_TIME:
             self._scale.clock = datetime(

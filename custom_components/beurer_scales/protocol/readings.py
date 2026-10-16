@@ -16,14 +16,12 @@ from .metrics import (
     decode_body_composition_frame,
     decode_custom1_frame,
     decode_custom2_frame,
+    decode_heart_rate_frame,
+    decode_segment_body_frame,
+    decode_segment_fat_frame,
+    decode_segment_muscle_frame,
 )
-from .models import (
-    BODY_COMPOSITION_UUID,
-    CUSTOM1_UUID,
-    CUSTOM2_UUID,
-    WEIGHT_MEASUREMENT_UUID,
-    ScaleModel,
-)
+from .models import WEIGHT_MEASUREMENT_UUID, FrameKind, ScaleModel
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -92,39 +90,60 @@ class ReadingAssembler:
 def reading_metrics(reading: Reading, model: ScaleModel) -> dict[Metric, float]:
     """The body-composition metrics of a reading that its model measures.
 
-    A metric is left out when the scale didn't measure it or its frame is
-    missing or malformed.
+    Each frame is decoded as the model's table says. A metric is left out when
+    the scale didn't measure it or its frame is missing or malformed. When two
+    frames carry a metric (body water), the later frame's value wins.
     """
-    values: dict[Metric, float | None] = {Metric.BMI: reading.bmi}
-    water_mass_kg: float | None = None
-    try:
-        if (frame := reading.frames.get(BODY_COMPOSITION_UUID)) is not None:
+    values: dict[Metric, float] = {}
+    if reading.bmi is not None:
+        values[Metric.BMI] = reading.bmi
+    for uuid, kind in model.reading_frames:
+        if (frame := reading.frames.get(uuid)) is None:
+            continue
+        try:
+            decoded = _decode_frame(kind, frame, reading, model)
+        except FrameError as err:
+            _LOGGER.warning("Ignoring a %s frame: %s", kind, err)
+            continue
+        values |= {metric: v for metric, v in decoded.items() if v is not None}
+    return {
+        metric: value
+        for metric in model.metrics
+        if (value := values.get(metric)) is not None
+    }
+
+
+def _decode_frame(
+    kind: FrameKind, frame: bytes, reading: Reading, model: ScaleModel
+) -> Mapping[Metric, float | None]:
+    match kind:
+        case FrameKind.BODY_COMPOSITION:
             body = decode_body_composition_frame(
                 frame, mass_resolution_kg=model.body_mass_resolution_kg
             )
             water_mass_kg = body.body_water_mass_kg
-            values |= {
+            return {
                 Metric.BODY_FAT: body.body_fat_percent,
                 Metric.BMR: body.bmr_kcal,
                 Metric.MUSCLE: body.muscle_percent,
                 Metric.SOFT_LEAN_MASS: body.soft_lean_mass_kg,
                 Metric.IMPEDANCE: body.impedance_ohm,
+                # The app's fallback when custom2 has no water % (§5.3).
+                Metric.BODY_WATER: (
+                    round(water_mass_kg / reading.weight_kg * 100, 1)
+                    if water_mass_kg and reading.weight_kg
+                    else None
+                ),
             }
-    except FrameError as err:
-        _LOGGER.warning("Ignoring a body composition frame: %s", err)
-    try:
-        if (frame := reading.frames.get(CUSTOM1_UUID)) is not None:
+        case FrameKind.CUSTOM1:
             custom1 = decode_custom1_frame(frame)
-            values |= {
+            return {
                 Metric.IDEAL_WEIGHT: custom1.ideal_weight_kg,
                 Metric.AMR: custom1.amr_kcal,
             }
-    except FrameError as err:
-        _LOGGER.warning("Ignoring a custom1 frame: %s", err)
-    try:
-        if (frame := reading.frames.get(CUSTOM2_UUID)) is not None:
+        case FrameKind.CUSTOM2:
             custom2 = decode_custom2_frame(frame)
-            values |= {
+            return {
                 Metric.VISCERAL_FAT: custom2.visceral_fat,
                 Metric.METABOLIC_AGE: custom2.metabolic_age_years,
                 Metric.LEAN_BODY_MASS: custom2.lean_body_mass_kg,
@@ -134,13 +153,14 @@ def reading_metrics(reading: Reading, model: ScaleModel) -> dict[Metric, float]:
                 Metric.BONE_MASS: custom2.bone_mass_kg,
                 Metric.BODY_WATER: custom2.body_water_percent,
             }
-    except FrameError as err:
-        _LOGGER.warning("Ignoring a custom2 frame: %s", err)
-    if values.get(Metric.BODY_WATER) is None and water_mass_kg and reading.weight_kg:
-        # The app's fallback when custom2 has no water % (§5.3).
-        values[Metric.BODY_WATER] = round(water_mass_kg / reading.weight_kg * 100, 1)
-    return {
-        metric: value
-        for metric in model.metrics
-        if (value := values.get(metric)) is not None
-    }
+        case FrameKind.HEART_RATE:
+            return decode_heart_rate_frame(frame)
+        case FrameKind.SEGMENT_BODY:
+            return decode_segment_body_frame(frame)
+        case FrameKind.SEGMENT_FAT:
+            return decode_segment_fat_frame(frame)
+        case FrameKind.SEGMENT_MUSCLE:
+            return decode_segment_muscle_frame(frame)
+        case FrameKind.WEIGHT:
+            # Not in `reading.frames`: the weight frame makes the reading itself.
+            return {}

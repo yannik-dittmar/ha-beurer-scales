@@ -5,6 +5,10 @@
       "bluetooth_confirm": {
         "description": "Do you want to set up {name}? Setting up the scale doesn't connect to it; scale users are added afterwards."
       },
+      "untested_model": {
+        "title": "Untested scale model",
+        "description": "The {name} hasn't been tested with this integration yet. It belongs to the same family as the tested BF450, so it should work, but some readings or features may not. Please report how it works on the project's issue tracker. Setting up the scale doesn't connect to it; scale users are added afterwards."
+      },
       "user": {
         "description": "Choose a Beurer scale that Home Assistant has seen nearby. Step on the scale to wake it if it isn't listed.",
         "data": {
@@ -198,6 +202,51 @@
       },
       "impedance": {
         "name": "Impedance"
+      },
+      "heart_rate": {
+        "name": "Heart rate"
+      },
+      "upper_body_fat": {
+        "name": "Upper body fat"
+      },
+      "lower_body_fat": {
+        "name": "Lower body fat"
+      },
+      "upper_body_muscle": {
+        "name": "Upper body muscle"
+      },
+      "lower_body_muscle": {
+        "name": "Lower body muscle"
+      },
+      "left_arm_fat": {
+        "name": "Left arm fat"
+      },
+      "right_arm_fat": {
+        "name": "Right arm fat"
+      },
+      "left_leg_fat": {
+        "name": "Left leg fat"
+      },
+      "right_leg_fat": {
+        "name": "Right leg fat"
+      },
+      "torso_fat": {
+        "name": "Torso fat"
+      },
+      "left_arm_muscle": {
+        "name": "Left arm muscle"
+      },
+      "right_arm_muscle": {
+        "name": "Right arm muscle"
+      },
+      "left_leg_muscle": {
+        "name": "Left leg muscle"
+      },
+      "right_leg_muscle": {
+        "name": "Right leg muscle"
+      },
+      "torso_muscle": {
+        "name": "Torso muscle"
       }
     }
   },

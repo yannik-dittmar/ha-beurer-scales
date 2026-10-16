@@ -3,7 +3,55 @@
   "name": "Beurer Scales",
   "bluetooth": [
     {
+      "local_name": "BF105*"
+    },
+    {
+      "local_name": "BF1000*"
+    },
+    {
+      "local_name": "BF405*"
+    },
+    {
       "local_name": "BF450*"
+    },
+    {
+      "local_name": "BF451*"
+    },
+    {
+      "local_name": "BF500*"
+    },
+    {
+      "local_name": "BF600*"
+    },
+    {
+      "local_name": "BF720*"
+    },
+    {
+      "local_name": "BF722*"
+    },
+    {
+      "local_name": "BF850*"
+    },
+    {
+      "local_name": "BF880*"
+    },
+    {
+      "local_name": "BF915*"
+    },
+    {
+      "local_name": "BF950*"
+    },
+    {
+      "local_name": "BF980*"
+    },
+    {
+      "local_name": "BF990*"
+    },
+    {
+      "local_name": "GS435*"
+    },
+    {
+      "local_name": "SRBF1*"
     },
     {
       "service_data_uuid": "0000181d-0000-1000-8000-00805f9b34fb"
