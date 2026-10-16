@@ -262,3 +262,32 @@ async def test_adopting_the_slot_again_cancels_the_pending_deletion(
     await stay_awake(hass, freezer, fake_scale, 26)
 
     assert 3 in fake_scale.users
+
+
+@pytest.mark.freeze_time(tick=True)
+async def test_a_leftover_slot_and_the_deletion_share_one_connection(
+    hass: HomeAssistant,
+    scale: MockConfigEntry,
+    fake_scale: FakeScale,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """A wake listing only a slot left pending earlier syncs it, then deletes."""
+    await remove_bob(hass, scale)
+    fake_scale.pairing = "unsupported"
+    fake_scale.weigh_in(
+        2, FakeReading.from_capture(frames.READING_SLOT_2, at=local_now())
+    )
+    await wake_scale(hass, fake_scale)
+    fake_scale.awake = False
+    await stay_awake(hass, freezer, fake_scale, 30)
+    fake_scale.pairing = "supported"
+    attempts = fake_scale.connection_attempts
+
+    await wake_scale(hass, fake_scale)
+    await stay_awake(hass, freezer, fake_scale, 20)
+    assert fake_scale.connection_attempts == attempts
+    await stay_awake(hass, freezer, fake_scale, 6)
+
+    assert state(hass, WEIGHT).state == "78.4"
+    assert 3 not in fake_scale.users
+    assert fake_scale.connection_attempts == attempts + 1
