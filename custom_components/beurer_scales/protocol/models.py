@@ -19,6 +19,11 @@ def uuid16(short: int) -> str:
 # Characteristics every BF600-family model shares (protocol doc §1).
 CURRENT_TIME_UUID = uuid16(0x2A2B)
 USER_CONTROL_POINT_UUID = uuid16(0x2A9F)
+# User Data Service profile characteristics; writable only while consented.
+DATE_OF_BIRTH_UUID = uuid16(0x2A85)
+GENDER_UUID = uuid16(0x2A8C)
+HEIGHT_UUID = uuid16(0x2A8E)
+DATABASE_CHANGE_INCREMENT_UUID = uuid16(0x2A99)
 BATTERY_LEVEL_UUID = uuid16(0x2A19)
 # Starts every reading (§9.4b).
 WEIGHT_MEASUREMENT_UUID = uuid16(0x2A9D)
@@ -36,6 +41,8 @@ class ScaleModel:
     slot_count: int
     # The custom characteristic that lists the scale users (BF450: FFFF/FFF1).
     user_list_uuid: str
+    # The custom characteristic holding the activity level (BF450: FFFF/FFF2).
+    activity_level_uuid: str
     # Verified on real hardware; other models get an "untested" warning.
     verified: bool = False
     # The characteristics a reading arrives on, in the order the scale sends them;
@@ -53,6 +60,7 @@ BF450 = ScaleModel(
     name="BF450",
     slot_count=8,
     user_list_uuid=uuid16(0xFFF1),
+    activity_level_uuid=uuid16(0xFFF2),
     verified=True,
     reading_uuids=(
         WEIGHT_MEASUREMENT_UUID,
