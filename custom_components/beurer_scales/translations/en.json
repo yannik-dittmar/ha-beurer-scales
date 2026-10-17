@@ -5,6 +5,10 @@
       "bluetooth_confirm": {
         "description": "Do you want to set up {name}? Setting up the scale doesn't connect to it; scale users are added afterwards."
       },
+      "untested_model": {
+        "title": "Untested scale model",
+        "description": "The {name} hasn't been tested with this integration yet. It belongs to the same family as the tested BF450, so it should work, but some readings or features may not. Please report how it works on the project's issue tracker. Setting up the scale doesn't connect to it; scale users are added afterwards."
+      },
       "user": {
         "description": "Choose a Beurer scale that Home Assistant has seen nearby. Step on the scale to wake it if it isn't listed.",
         "data": {
@@ -20,6 +24,328 @@
       "already_in_progress": "This scale is already being set up.",
       "no_devices_found": "No unconfigured Beurer scale has been seen nearby. Step on the scale to wake it, then try again.",
       "not_supported": "This scale model isn't supported."
+    }
+  },
+  "config_subentries": {
+    "scale_user": {
+      "initiate_flow": {
+        "user": "Add scale user"
+      },
+      "entry_type": "Scale user",
+      "step": {
+        "user": {
+          "title": "Add scale user",
+          "menu_options": {
+            "create": "Create new scale user",
+            "adopt": "Adopt existing slot"
+          }
+        },
+        "create": {
+          "title": "Create new scale user",
+          "description": "Home Assistant creates the scale user on the scale and chooses its consent code itself. The scale uses the profile to compute body composition.",
+          "data": {
+            "person": "Person",
+            "name": "Name",
+            "birth_date": "Birth date",
+            "height_cm": "Height",
+            "gender": "Gender",
+            "activity_level": "Activity level"
+          },
+          "data_description": {
+            "person": "Optional. Links the scale user to a Home Assistant person.",
+            "name": "Leave empty to use the person's name.",
+            "birth_date": "The scale supports ages from 10 to 100 years.",
+            "height_cm": "In centimetres, from 100 to 220."
+          }
+        },
+        "teach_more": {
+          "title": "Teach the scale",
+          "description": "Reading {reading} of {readings} taken. Each reading teaches the scale the new scale user's weight, so it recognises them afterwards. Step off and on again for another reading, or finish now.",
+          "menu_options": {
+            "teach": "Take another reading",
+            "teach_done": "Finish"
+          }
+        },
+        "adopt": {
+          "title": "Adopt existing slot",
+          "description": "Use a slot whose consent code you know, for example one Home Assistant created before a reinstall. Don't adopt a scale user that the Beurer app also uses: Home Assistant must be its only client.",
+          "data": {
+            "person": "Person",
+            "name": "Name",
+            "slot": "Slot",
+            "consent_code": "Consent code"
+          },
+          "data_description": {
+            "person": "Optional. Links the scale user to a Home Assistant person.",
+            "name": "Leave empty to use the person's name.",
+            "slot": "The slot number on the scale.",
+            "consent_code": "The 4-digit code chosen when this scale user was created."
+          }
+        },
+        "reconfigure": {
+          "title": "Change scale user",
+          "description": "Renaming the scale user or changing its person doesn't need the scale. Changing the profile does: Home Assistant then asks you to wake the scale and writes the new profile to it.",
+          "data": {
+            "person": "Person",
+            "name": "Name",
+            "birth_date": "Birth date",
+            "height_cm": "Height",
+            "gender": "Gender",
+            "activity_level": "Activity level"
+          },
+          "data_description": {
+            "person": "Optional. Links the scale user to a Home Assistant person.",
+            "name": "Leave empty to use the person's name.",
+            "birth_date": "The scale supports ages from 10 to 100 years.",
+            "height_cm": "In centimetres, from 100 to 220."
+          }
+        },
+        "repair_adopt": {
+          "title": "Enter the consent code again",
+          "description": "The scale rejected the consent code of {name} (slot {slot}). Enter the code this scale user was created with. Home Assistant checks it at the next wake.",
+          "data": {
+            "consent_code": "Consent code"
+          },
+          "data_description": {
+            "consent_code": "The 4-digit code chosen when this scale user was created."
+          }
+        },
+        "repair_create": {
+          "title": "Create the scale user again",
+          "description": "Home Assistant creates {name} on the scale again, with the stored profile and a new consent code. The scale may put the scale user into a different slot; its sensors stay the same. Afterwards, {name} steps off and on the scale a few times so it learns to recognise them."
+        }
+      },
+      "progress": {
+        "wake": "Step on the scale to wake it. Home Assistant then connects, checks the consent code and reads the profile from the scale.",
+        "create": "Step on the scale to wake it. Home Assistant then connects, creates the scale user on the scale and writes its profile.",
+        "teach": "Now the new scale user steps off the scale and on again: reading {reading} of {readings}. Stand still until the scale shows the result.",
+        "reconfigure": "Step on the scale to wake it. Home Assistant then connects and writes the new profile to the scale."
+      },
+      "create_entry": {
+        "teaching_timeout": "Teaching ended because the scale got no further reading in time. The scale user was created with the readings taken so far."
+      },
+      "error": {
+        "name_required": "Choose a person or enter a name.",
+        "name_in_use": "Another scale user of this scale already has this name.",
+        "slot_in_use": "This slot already is a scale user of this scale.",
+        "slot_not_found": "The scale has no scale user in this slot.",
+        "invalid_consent_code": "The scale rejected this consent code.",
+        "invalid_birth_date": "Enter a birth date for an age between 10 and 100 years."
+      },
+      "abort": {
+        "no_free_slot": "Every slot on the scale is taken. Remove a scale user first, then try again.",
+        "wake_timeout": "The scale didn't wake up within 3 minutes. Start again and step on the scale.",
+        "pairing_unsupported": "The Bluetooth adapter or proxy that reached the scale can't pair with it. Use an ESPHome Bluetooth proxy, or make the host adapter pairable.",
+        "cannot_connect": "Home Assistant couldn't talk to the scale. Make sure it is in range, then try again.",
+        "teaching_timeout": "Nobody stepped on the scale for the first teaching reading. The new scale user was removed from the scale again; start again to create it.",
+        "consent_rejected": "The scale rejected this scale user's consent code, so the profile couldn't be written. Nothing was changed.",
+        "reconfigure_successful": "The scale user was updated.",
+        "scale_user_repaired": "The scale user works again.",
+        "slot_now_empty": "The scale no longer has a scale user in this slot. Open the repair again and choose to create the scale user again.",
+        "profile_unknown": "Home Assistant doesn't know this scale user's full profile, so it can't create it again. Remove the scale user and add it anew.",
+        "slot_held_by_other_scale_user": "The scale put the new scale user into a slot that another scale user of this scale still holds in Home Assistant, so Home Assistant removed it again. Repair or remove that scale user first."
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "last_sync": {
+        "name": "Last sync"
+      },
+      "last_reading": {
+        "name": "Last reading"
+      },
+      "bmi": {
+        "name": "BMI"
+      },
+      "body_fat": {
+        "name": "Body fat"
+      },
+      "body_water": {
+        "name": "Body water"
+      },
+      "muscle": {
+        "name": "Muscle"
+      },
+      "bone_mass": {
+        "name": "Bone mass"
+      },
+      "bmr": {
+        "name": "Basal metabolic rate"
+      },
+      "amr": {
+        "name": "Active metabolic rate"
+      },
+      "visceral_fat": {
+        "name": "Visceral fat"
+      },
+      "metabolic_age": {
+        "name": "Metabolic age"
+      },
+      "lean_body_mass": {
+        "name": "Lean body mass"
+      },
+      "protein_mass": {
+        "name": "Protein mass"
+      },
+      "total_muscle_mass": {
+        "name": "Total muscle mass"
+      },
+      "soft_lean_mass": {
+        "name": "Soft lean mass"
+      },
+      "subcutaneous_fat": {
+        "name": "Subcutaneous fat"
+      },
+      "ideal_weight": {
+        "name": "Ideal weight"
+      },
+      "impedance": {
+        "name": "Impedance"
+      },
+      "heart_rate": {
+        "name": "Heart rate"
+      },
+      "upper_body_fat": {
+        "name": "Upper body fat"
+      },
+      "lower_body_fat": {
+        "name": "Lower body fat"
+      },
+      "upper_body_muscle": {
+        "name": "Upper body muscle"
+      },
+      "lower_body_muscle": {
+        "name": "Lower body muscle"
+      },
+      "left_arm_fat": {
+        "name": "Left arm fat"
+      },
+      "right_arm_fat": {
+        "name": "Right arm fat"
+      },
+      "left_leg_fat": {
+        "name": "Left leg fat"
+      },
+      "right_leg_fat": {
+        "name": "Right leg fat"
+      },
+      "torso_fat": {
+        "name": "Torso fat"
+      },
+      "left_arm_muscle": {
+        "name": "Left arm muscle"
+      },
+      "right_arm_muscle": {
+        "name": "Right arm muscle"
+      },
+      "left_leg_muscle": {
+        "name": "Left leg muscle"
+      },
+      "right_leg_muscle": {
+        "name": "Right leg muscle"
+      },
+      "torso_muscle": {
+        "name": "Torso muscle"
+      }
+    }
+  },
+  "selector": {
+    "gender": {
+      "options": {
+        "male": "Male",
+        "female": "Female"
+      }
+    },
+    "activity_level": {
+      "options": {
+        "1": "1 - None",
+        "2": "2 - Low",
+        "3": "3 - Medium",
+        "4": "4 - High",
+        "5": "5 - Very high"
+      }
+    }
+  },
+  "issues": {
+    "pairing_impossible": {
+      "title": "{name} can't pair through this Bluetooth path",
+      "description": "Home Assistant reached the scale {name}, but the Bluetooth adapter or proxy it used couldn't pair (bond) with it. The scale only stays connected when it is paired, so readings aren't synced.\n\nTo fix it, do one of these:\n- Add an ESPHome Bluetooth proxy on an ESP32 near the scale. ESPHome proxies pair with the scale automatically.\n- If Home Assistant uses its own Bluetooth adapter, make the host adapter pairable. A local adapter on Home Assistant OS usually can't pair.\n\nThis issue goes away after the next successful sync."
+    },
+    "unsupported_unit": {
+      "title": "{name} reports weights in {unit}",
+      "description": "The scale {name} sent readings in {unit} instead of kg. Home Assistant only supports kg and didn't record these readings, so your sensors don't show wrong values.\n\nSet the scale's display unit back to kg, for example in the Beurer app. Home Assistant never changes the scale's settings. This warning goes away with the next reading in kg."
+    },
+    "wrong_consent_code": {
+      "title": "{scale}: the scale rejects the consent code of {name}",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Fix {name}",
+            "description": "The scale still has a scale user in this slot, but it rejects the consent code Home Assistant stored, for example because another client created a new scale user there. Home Assistant doesn't sync {name} until this is fixed.",
+            "menu_options": {
+              "adopt": "Enter the consent code again",
+              "create": "Create the scale user again",
+              "remove": "Remove the scale user from Home Assistant"
+            }
+          }
+        },
+        "abort": {
+          "continue_in_scale_user_flow": "Continue in the scale user flow.",
+          "scale_user_removed": "This scale user no longer exists."
+        }
+      }
+    },
+    "scale_user_deleted": {
+      "title": "{scale}: {name} was deleted on the scale",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Fix {name}",
+            "description": "The scale no longer has this scale user, for example because it was deleted in the Beurer app. Home Assistant doesn't sync {name} until this is fixed.",
+            "menu_options": {
+              "create": "Create the scale user again",
+              "remove": "Remove the scale user from Home Assistant"
+            }
+          }
+        },
+        "abort": {
+          "continue_in_scale_user_flow": "Continue in the scale user flow.",
+          "scale_user_removed": "This scale user no longer exists."
+        }
+      }
+    },
+    "factory_reset": {
+      "title": "{scale} was factory-reset",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Fix {name}",
+            "description": "The scale lists no scale users anymore, so it was factory-reset and {name} is gone. Home Assistant renewed the Bluetooth bond with the scale. Create the scale user again, or remove it.",
+            "menu_options": {
+              "create": "Create the scale user again",
+              "remove": "Remove the scale user from Home Assistant"
+            }
+          }
+        },
+        "abort": {
+          "continue_in_scale_user_flow": "Continue in the scale user flow.",
+          "scale_user_removed": "This scale user no longer exists."
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Scale options",
+        "data": {
+          "notify_unrecognised": "Notify about unrecognised weigh-ins"
+        },
+        "data_description": {
+          "notify_unrecognised": "Send a notification when someone steps on the scale and it recognises them as none of its scale users, so they can be added."
+        }
+      }
     }
   }
 }

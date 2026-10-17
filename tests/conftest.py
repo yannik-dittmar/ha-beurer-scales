@@ -1,17 +1,24 @@
 """Shared fixtures for Beurer Scales tests."""
 
 import time
+from collections.abc import Iterator
+from datetime import timedelta
+from unittest.mock import patch
 
 import pytest
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
+from freezegun.api import FrozenDateTimeFactory
 from homeassistant.components.bluetooth import (
     BluetoothServiceInfoBleak,
     async_get_advertisement_callback,
 )
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 
 # HA mounts the test plugin's config dir, which ships its own `custom_components`
 # package. Importing ours first makes HA find this repo's integrations.
@@ -20,6 +27,8 @@ from custom_components.beurer_scales.const import CONF_MODEL, DOMAIN
 from custom_components.beurer_scales.protocol.models import (
     SWAPPED_WEIGHT_SCALE_UUID as SWAPPED_WEIGHT_SCALE_UUID,
 )
+
+from .fake_scale import FakeScale
 
 SCALE_ADDRESS = "AA:BB:CC:DD:EE:01"
 WEIGHT_SCALE_UUID = "0000181d-0000-1000-8000-00805f9b34fb"
@@ -39,6 +48,14 @@ def auto_enable_bluetooth(
     Bluetooth reads the discovery matchers once at setup, so custom integrations
     must be enabled before it starts.
     """
+
+
+@pytest.fixture(autouse=True)
+def fast_quiet_period(monkeypatch: pytest.MonkeyPatch) -> None:
+    """End reading collection quickly: the fake scale sends without delays."""
+    monkeypatch.setattr(
+        "custom_components.beurer_scales.protocol.session.QUIET_PERIOD", 0.02
+    )
 
 
 @pytest.fixture
@@ -98,3 +115,52 @@ async def inject_advertisement(
     async_get_advertisement_callback(hass)(info)
     # Discovery flows start as background tasks.
     await hass.async_block_till_done(wait_background_tasks=True)
+
+
+@pytest.fixture
+def fake_scale() -> Iterator[FakeScale]:
+    """A sleeping BF450 behind the Bluetooth boundary; HA connects to it."""
+    scale = FakeScale(address=SCALE_ADDRESS)
+    with patch(
+        "custom_components.beurer_scales.protocol.session.establish_connection",
+        scale.establish_connection,
+    ):
+        yield scale
+
+
+@pytest.fixture
+async def loaded_scale(
+    hass: HomeAssistant, configured_scale: MockConfigEntry
+) -> MockConfigEntry:
+    """A BF450 that is set up and loaded."""
+    assert await hass.config_entries.async_setup(configured_scale.entry_id)
+    await hass.async_block_till_done()
+    return configured_scale
+
+
+async def wake_scale(hass: HomeAssistant, scale: FakeScale) -> None:
+    """Step on the fake scale: it wakes up and advertises."""
+    scale.wake()
+    await inject_advertisement(
+        hass,
+        scale_advertisement(
+            address=scale.address,
+            local_name=scale.local_name,
+            service_data=scale.service_data(),
+        ),
+    )
+
+
+async def stay_awake(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    scale: FakeScale,
+    seconds: float,
+) -> None:
+    """Let time pass while the awake scale keeps advertising (~every 2 s)."""
+    for _ in range(int(seconds // 2)):
+        freezer.tick(timedelta(seconds=2))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done(wait_background_tasks=True)
+        if scale.awake:
+            await wake_scale(hass, scale)

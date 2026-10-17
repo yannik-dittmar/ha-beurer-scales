@@ -47,7 +47,7 @@ The form shared by both paths:
 1. Form as above.
 2. Progress step "Step on the scale to wake it". It waits for the wake through the per-advert callback, with its own timeout (~3 min), because the flow framework has none.
 3. Connect and bond. Read the user list and abort if there is no free slot. Register the scale user with a random consent code (1111–9998). Consent and write the profile.
-4. **Teaching**, in the same connection. A progress step says "Step off and on again: reading k of 3". Each live reading counts (2A9D → … → FFF4 `01`). The user can finish after 1 reading, and the step has its own timeout.
+4. **Teaching**, in the same connection. A progress step says "Step off and on again: reading k of 3". Each live reading counts (2A9D → … → FFF4 `01`). The user can finish after 1 reading, and the step has its own timeout. After each reading a menu offers another reading or finishing (a progress step can't have buttons); the per-reading timeout keeps running while it is open. A timeout before the first reading deletes the scale user; after one, it keeps the scale user and the flow says teaching ended early.
 5. Disconnect and create the subentry.
 
 **Abort or failure after step 3:** delete the scale user on the scale (UCP `03`, while still consented) before disconnecting. A half-created scale user that HA doesn't track would steal recognition from the others.
@@ -66,7 +66,7 @@ A name-only change does not need the scale.
 
 ### 4.3 Remove scale user
 
-HA removes the subentry immediately. The integration remembers `(slot, consent code)` in `Store` as a pending deletion. At the next wake of any kind, after the weigh-in is final (same timing rule as §5.3), it connects, consents and deletes the scale user. If consent fails, the request is dropped.
+HA removes the subentry immediately. The integration remembers `(slot, consent code)` in `Store` as a pending deletion. At the next wake of any kind, after the weigh-in is final (same timing rule as §5.3), it connects, consents and deletes the scale user. If consent fails as the first consent of the connection, the code is wrong and the request is dropped. If it fails as a later consent (after a sync, or after another deletion), the scale may only allow one consent per connection *(V2, §8)*: the request is kept and waits for a wake where it can be the connection's first consent, i.e. one without a managed slot pending.
 
 ## 5. Syncing
 
@@ -89,7 +89,11 @@ The order follows protocol doc §3:
 Several managed slots pending:
 - Sync the slot that just became pending first.
 - Then try to consent the other managed pending slots in the same connection, to drain them.
-- If the scale refuses the second consent, drain them at later wakes. *(Unverified, §8.)*
+- If the scale refuses the second consent, drain them at later wakes. *(Unverified, §8.)* A refused slot goes first at its next sync: only a connection's first consent tells a wrong code apart (§6).
+
+Every session ends before the wake does: ~47 s after the wake started, minus a small margin, even when it starts late (at ~25 s, §5.3). Only the create flow's session, which keeps the scale awake while teaching, gets a longer budget.
+
+One session per scale at a time. A flow (create, adopt, reconfigure, repair fix flows) holds the scale from waiting for the wake to the end of its session; the coordinator doesn't queue behind it but leaves pending slots, the §5.3 check and deletions for a later wake.
 
 ### 5.3 Unrecognised weigh-ins
 
@@ -101,7 +105,7 @@ If a wake reaches ~25 s and no managed slot is pending, connect, read the user l
 
 - **Fresh reading:** written to the scale user's entities right away. The entity state time is the sync time, seconds after the weigh-in.
 - **Backlog reading** (timestamp more than 5 min older than the sync start): collected so the pending flag clears, then discarded. ([ADR 0005](adr/0005-backlog-readings-are-discarded.md))
-- **Guessed reading** (custom1 byte 4 ≠ 0): discarded. ([ADR 0006](adr/0006-guessed-readings-are-discarded.md))
+- **Guessed reading** (custom1 byte 4 ≠ 0, on models whose FFF5 frame is custom1): discarded. ([ADR 0006](adr/0006-guessed-readings-are-discarded.md))
 - Every discard logs a warning and creates one persistent notification per scale user and sync, giving the count, the time range and the reason.
 - **De-duplication:** keep a short `(slot, timestamp, weight)` log in `Store`, so a reading delivered twice (e.g. after a partial sync) is never emitted twice.
 

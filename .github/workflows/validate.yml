@@ -2,6 +2,7 @@ name: Validate
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -18,5 +19,3 @@ jobs:
       - uses: hacs/action@main
         with:
           category: integration
-          # Brand assets arrive with the first release (ticket "User documentation and first HACS release").
-          ignore: brands
