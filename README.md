@@ -21,7 +21,7 @@ Home Assistant discovers untested models too, and setup warns you that the model
 
 - **Home Assistant 2026.10 or newer.** The integration relies on a Bluetooth callback that fires for every advertisement, which arrived in 2026.10.
 - **A Bluetooth path that can pair (bond) with the scale.** The scale drops any connection that isn't bonded.
-  - Recommended: an [ESPHome Bluetooth proxy](https://esphome.io/components/bluetooth_proxy/) on an ESP32 near the scale, with `active: true`. ESPHome proxies pair with the scale automatically.
+  - Recommended: an [ESPHome Bluetooth proxy](https://esphome.io/components/bluetooth_proxy/) on an ESP32 near the scale, with `active: true` (Bluetooth scanning mode **Active** in its entry's options). The scale reports its weigh-ins only in its scan response, which a passively scanning proxy never receives; Home Assistant asks for active scanning when the scale wakes, but a proxy fixed to passive ignores that. ESPHome proxies pair with the scale automatically.
   - Home Assistant Container or Core with a host Bluetooth adapter that is pairable also works.
   - **Not supported: Home Assistant OS with only a built-in or USB Bluetooth adapter.** Home Assistant registers no pairing agent there, so the adapter can't bond, and this integration doesn't register its own. Add an ESPHome proxy instead.
   - Shelly devices can't be used as a proxy for this scale: they can't connect to it.
@@ -103,6 +103,7 @@ Problems that need your action appear under **Settings → System → Repairs**.
 | Scale user deleted on the scale | The slot is empty, for example after deleting it in the Beurer app. | Create the scale user again; remove the scale user from Home Assistant |
 | Scale factory-reset | The scale lists no scale users at all. Home Assistant renews the Bluetooth bond once by itself. | Create the scale user again; remove the scale user from Home Assistant |
 | Can't pair through this Bluetooth path | The adapter or proxy that reached the scale couldn't bond with it. | Add an ESPHome proxy or make the host adapter pairable. Clears after the next successful sync. |
+| Home Assistant sees no pending weigh-ins | Three wakes in a row passed without a scan response from the scale, so Home Assistant can't tell who stepped on. | Set the proxy's Bluetooth scanning mode to Active (ESPHome entry, **Configure**). Clears when a scan response arrives. |
 | Scale reports weights in lb or st | The scale's display unit isn't kg. Those readings aren't recorded. | Set the scale back to kg, for example in the Beurer app. Home Assistant never changes scale settings. Clears with the next reading in kg. |
 
 **Create the scale user again** creates it on the scale with the stored profile and a new consent code, followed by the same one-step-on teaching. The scale may choose a different slot; the sensors and their history stay the same.

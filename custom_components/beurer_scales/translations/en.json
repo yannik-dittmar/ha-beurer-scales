@@ -335,6 +335,10 @@
     "deletion_failing": {
       "title": "{name}: removed scale users are still not deleted on the scale",
       "description": "The scale users in slot(s) {slots} were removed in Home Assistant, but {name} still has them: Home Assistant did not manage to delete them in the last {wakes} wakes of the scale. They keep taking up slots.\n\nThe likely causes are that Home Assistant never connects to the scale, or that the connection fails:\n- Home Assistant scans passively. The scale's advertisements don't reach it in a way it can act on.\n- The Bluetooth proxy is too far from the scale, or its connection is weak.\n- The proxy or adapter holds an old bond with the scale, for example after a factory reset.\n\nCheck the **Pending deletions** sensor on the scale's device. Move the proxy closer to the scale and step on the scale again. This issue goes away when the deletions have run."
+    },
+    "no_scan_response": {
+      "title": "{name}: Home Assistant sees no pending weigh-ins",
+      "description": "The last {wakes} times {name} woke up, Home Assistant never received its scan response. The scale lists its pending weigh-ins only there, so Home Assistant can't tell who stepped on and doesn't sync them.\n\nThe Bluetooth path that hears the scale scans passively. Home Assistant asks for active scanning when the scale wakes, but not every path complies:\n- ESPHome Bluetooth proxy: open the proxy's entry in Home Assistant, go to **Configure** and set **Bluetooth scanning mode** to **Active**.\n- Home Assistant's own adapter: check that it supports active scanning.\n- The proxy may be too far from the scale.\n\nThis issue goes away when a scan response arrives."
     }
   },
   "options": {

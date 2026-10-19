@@ -92,6 +92,7 @@ A failure before the write (no wake, no pairing, no connection) changes nothing 
 
 - Watch every advertisement of the scale (per-advert callback, HA ≥ 2026.10).
 - The pending-slot list (0x1D18 service data) comes only in the scan response (protocol doc §9.6). HA merges service data, so only a packet whose raw bytes hold the list counts; without raw bytes (BlueZ) the service data is taken as is.
+- A passive path never hears the scan response. The first advertisement of each wake (which passive scanning does see) makes HA request an active scan for the rest of the wake (`bluetooth.async_request_active_scan`, a 35 s window, the most habluetooth allows). Paths in Auto mode flip to active for it; a path fixed to passive cannot (§6).
 - The wake's first slot list shows the slots pending before the wake. They wait until the weigh-in is final (§5.3): connecting during a weigh-in aborts it.
 - Connect when a later slot list appends a **managed** slot: that weigh-in is final now, 4–10 s after stepping on. ([ADR 0008](adr/0008-connect-after-unrecognised-weigh-ins.md))
 - Pending slots without a subentry are ignored and logged at debug level.
@@ -119,6 +120,7 @@ One session per scale at a time. A flow (create, adopt, reconfigure, repair fix 
 
 At ~25 s into a wake the weigh-in is final (the scale appends its slot 4–10 s after stepping on). If HA hasn't connected yet:
 - Managed slots pending before the wake are synced now.
+- If the wake had **no scan response at all**, nothing is known about the pending slots: no "unrecognised" notification (an empty list is a list; only that means nobody HA manages was recognised). The user-list check and deletions still run.
 - If no managed slot is pending, connect, read the user list (no consent needed) and disconnect. ([ADR 0008](adr/0008-connect-after-unrecognised-weigh-ins.md))
 - This detects a factory reset or a deleted scale user (§6).
 - If the option is on, a persistent notification says that someone was weighed but not recognised (with the weight, if the advert or user list provides it; otherwise without).
@@ -143,6 +145,7 @@ At ~25 s into a wake the weigh-in is final (the scale appends its slot 4–10 s 
 | Stale bond on the path (the scale was factory-reset) | a pairing error in any connect attempt, not only the final message | Remove the path's bond (ESPHome `bluetooth_device_unpair`, no connection needed) and connect again once; if that fails too, the pairing repair below |
 | Pairing impossible on this path | pair error / `NotImplementedError` | Repair: add an ESPHome proxy or make the host adapter pairable; the text mentions a stale bond after a factory reset |
 | Removed scale user not deleted for several wakes (#29) | a wake starts with the deletion still pending, three wakes in a row | Warning repair (not fixable): likely causes are passive scanning, a weak proxy or a stale bond (#22, #23). Clears when the deletions have run |
+| No scan response for several wakes (#22) | three wakes in a row reached the 25 s moment without any scan response | Warning repair (not fixable): set the ESPHome proxy's Bluetooth scanning mode to Active. Clears with the next scan response |
 | Scale reports a unit other than kg | settings / frames | Warning. v1 never writes scale settings. |
 
 Repair fix flows forward to the scale user's subentry flows via `next_flow`.

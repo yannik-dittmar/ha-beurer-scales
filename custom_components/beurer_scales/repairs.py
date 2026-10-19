@@ -29,6 +29,7 @@ from .const import (
 ISSUE_PAIRING_IMPOSSIBLE = "pairing_impossible"
 ISSUE_UNSUPPORTED_UNIT = "unsupported_unit"
 ISSUE_DELETION_FAILING = "deletion_failing"
+ISSUE_NO_SCAN_RESPONSE = "no_scan_response"
 
 
 def _issue_id(kind: str, entry: ConfigEntry) -> str:
@@ -112,6 +113,36 @@ def async_create_deletion_issue(
 def async_delete_deletion_issue(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """The pending deletions have run, or none is left."""
     ir.async_delete_issue(hass, DOMAIN, _issue_id("deletion_failing", entry))
+
+
+@callback
+def async_create_no_scan_response_issue(
+    hass: HomeAssistant, entry: ConfigEntry, wakes: int
+) -> None:
+    """Several wakes went by without a single scan response (#22).
+
+    The scale lists its pending slots only in its scan response, which a
+    passively scanning path never receives. Advisory only: the user sets the
+    proxy's Bluetooth scanning mode to active.
+    """
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        _issue_id("no_scan_response", entry),
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key=ISSUE_NO_SCAN_RESPONSE,
+        translation_placeholders={"name": entry.title, "wakes": str(wakes)},
+        learn_more_url="https://esphome.io/components/bluetooth_proxy/",
+    )
+
+
+@callback
+def async_delete_no_scan_response_issue(
+    hass: HomeAssistant, entry: ConfigEntry
+) -> None:
+    """A scan response arrived."""
+    ir.async_delete_issue(hass, DOMAIN, _issue_id("no_scan_response", entry))
 
 
 # --- Scale user issues: wrong code, deleted, factory reset (#12) ---
