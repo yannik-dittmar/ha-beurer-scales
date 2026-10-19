@@ -18,14 +18,20 @@ leaves behind (renewed by unpair + pair), and a link that drops (weak signal).
 """
 
 import asyncio
+import contextlib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any, Literal
+from typing import Any, Literal, NoReturn
+from unittest.mock import patch
 
 from bleak.backends.device import BLEDevice
 from bleak.exc import BleakError
-from bleak_retry_connector import BleakConnectionError, BleakNotFoundError
+from bleak_retry_connector import (
+    BleakClientWithServiceCache,
+    BleakConnectionError,
+    BleakNotFoundError,
+)
 
 
 def _uuid(short: int) -> str:
@@ -147,6 +153,12 @@ class FakeScale:
     bond_stale: bool = False
     # How often a client renewed the bond (unpair, then pair).
     rebonds: int = 0
+    # The host's path (an ESPHome proxy) holds a bond the scale forgot, e.g. after
+    # a factory reset: bonding fails with auth error 97, the scale ends the link,
+    # and bleak-retry-connector's last error is only "Disconnected" (§9.6, V6).
+    proxy_bond_stale: bool = False
+    # How often a bond was removed on the path without a connection.
+    proxy_unpairs: int = 0
     # Pairing on an existing connection fails.
     pairing_fails: bool = False
     # Every write the scale received: (characteristic, data, with response).
@@ -166,6 +178,13 @@ class FakeScale:
         self.users.clear()
         self.bond_stale = True
         self.awake = False
+
+    async def remove_proxy_bond(self, *_args: Any) -> bool:
+        """Stand-in for `connection.async_remove_bond`: the proxy drops its bond."""
+        self.proxy_unpairs += 1
+        self.proxy_bond_stale = False
+        self.bond_stale = False
+        return True
 
     def wake(self) -> None:
         """Someone stepped on the scale: it advertises and accepts connections."""
@@ -270,6 +289,8 @@ class FakeScale:
         if pair and self.pairing == "unsupported":
             # An ESPHome proxy without pairing support (bleak-esphome).
             raise NotImplementedError("Pairing is not available in this version")
+        if pair and self.proxy_bond_stale:
+            await self._fail_on_stale_proxy_bond(client_class, device, name, kwargs)
         if pair and self.pairing == "fails":
             raise BleakConnectionError(
                 f"{name} - {device.address}: Failed to connect after 2 attempt(s): "
@@ -279,6 +300,44 @@ class FakeScale:
             self, bonded=pair, disconnected_callback=kwargs.get("disconnected_callback")
         )
         return self.client
+
+    async def _fail_on_stale_proxy_bond(
+        self,
+        client_class: type[Any],
+        device: BLEDevice,
+        name: str,
+        kwargs: dict[str, Any],
+    ) -> NoReturn:
+        """Two connect attempts as bleak-retry-connector makes them: the first
+        fails on the bond, the second only reports "Disconnected". The errors
+        pass through the client class's `connect`, as in the real thing."""
+        errors = iter(
+            [BleakError("Pairing failed due to error: 97"), BleakError("Disconnected")]
+        )
+
+        async def failing_connect(*_args: Any, **_kwargs: Any) -> None:
+            raise next(errors)
+
+        def no_backend(self: Any, *_args: Any, **_kwargs: Any) -> None:
+            """No platform backend behind the client."""
+
+        with (
+            patch.object(BleakClientWithServiceCache, "__init__", no_backend),
+            patch.object(BleakClientWithServiceCache, "connect", failing_connect),
+        ):
+            client = client_class(
+                device,
+                disconnected_callback=kwargs.get("disconnected_callback"),
+                pair=True,
+                _is_retry_client=True,
+            )
+            for _ in range(2):
+                with contextlib.suppress(BleakError):
+                    await client.connect(timeout=10.0)
+        raise BleakConnectionError(
+            f"{name} - {device.address}: Failed to connect after 2 attempt(s): "
+            "Disconnected"
+        )
 
 
 class FakeBleakClient:

@@ -28,6 +28,7 @@ Result of the design session on 2026-10-16. Terms are defined in [`CONTEXT.md`](
   - A proxy without pairing support raises `NotImplementedError` on pair. Show it as its own clear error.
 - Every session sits inside the ~47 s wake window: cap the whole session with a timeout, limit connection attempts, and always disconnect in `finally`.
 - Connect no earlier than 1.5 s after the wake starts. Proxies report the first advertisements at different times, and HA picks the path from the proxies that have reported the scale. Connecting at the very first advertisement left HA a single, distant proxy whose link broke (#17).
+- A failed bond is recognised from the pairing error of any connect attempt: bleak-retry-connector raises only the last error, which is just "Disconnected" because the scale ends the link after a bond error. `open_session` then calls its `remove_bond` hook and connects again once. `connection.async_open_session` passes `bond.async_remove_bond(hass, device)`, which asks the ESPHome proxy the scale was found through to drop its bond. A local adapter can't unpair without a connection, so there the failure stands and the repair explains the manual removal. The factory reset in the configure menu (#30) calls the same `async_remove_bond`.
 - A session watches the link. When it closes, every wait in the session (a response, a live reading) ends at once with `ConnectionLost` instead of running into its timeout.
 
 ## 4. Scale user lifecycle
@@ -122,7 +123,8 @@ At ~25 s into a wake the weigh-in is final (the scale appends its slot 4–10 s 
 | Wrong consent code | consent `20 02 04` + slot present in the user list | Fixable repair → adopt again with the code / create again / remove scale user |
 | Scale user deleted on the scale | consent `20 02 04` or §5.3 check: slot missing | Fixable repair → create again / remove scale user |
 | Factory reset | user list empty | Same repair, plus one automatic `unpair()` → `pair()` (the scale lost its bond keys) |
-| Pairing impossible on this path | pair error / `NotImplementedError` | Repair: add an ESPHome proxy or make the host adapter pairable |
+| Stale bond on the path (the scale was factory-reset) | a pairing error in any connect attempt, not only the final message | Remove the path's bond (ESPHome `bluetooth_device_unpair`, no connection needed) and connect again once; if that fails too, the pairing repair below |
+| Pairing impossible on this path | pair error / `NotImplementedError` | Repair: add an ESPHome proxy or make the host adapter pairable; the text mentions a stale bond after a factory reset |
 | Scale reports a unit other than kg | settings / frames | Warning. v1 never writes scale settings. |
 
 Repair fix flows forward to the scale user's subentry flows via `next_flow`.

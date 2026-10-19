@@ -61,3 +61,6 @@ A slot that the scale's scan response lists as having unsynced readings (the slo
 
 **Sync**:
 One connection during a wake window that collects the pending readings of one or more slots.
+
+**Stale bond**:
+A bond the host's Bluetooth path (an ESPHome proxy or adapter) still holds for a scale that has forgotten it, which happens after a factory reset. Bonding fails until the path drops it. The integration removes it from an ESPHome proxy without a connection and connects again.
