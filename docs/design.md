@@ -151,18 +151,20 @@ Repair fix flows forward to the scale user's subentry flows via `next_flow`.
 - Battery (%), read at every sync.
 - Last sync (timestamp, diagnostic).
 
-## 8. To verify when the scale is available again
+## 8. Hardware verification (done 2026-10-19, #17)
 
-| # | Item | Affects |
+Results are in the protocol doc §9.6. Where a result breaks this design, the follow-up issue is named.
+
+| # | Item | Result |
 |---|---|---|
-| V1 | An ESP32 ESPHome proxy bonds with the BF450 before the 0.5 s no-bond drop (research U4); proxy sync latency within the 47 s window | §3, everything |
-| V2 | One connection can consent two scale users in a row | §5.2 |
-| V3 | The scale stays awake while HA holds the connection for the teaching step, and each step-off/step-on yields a live reading | §4.1 step 4 |
-| V4 | 0x1D18 service data and local name are visible with passive scanning (research U7) | §5.1 |
-| V5 | Frames are unchanged when the scale display is set to lb/st | §6 |
-| V6 | Scale and proxy behaviour after a factory reset with an existing bond (research U5) | §6 |
-| V7 | The ~14 s "reading final" and ~25 s thresholds hold, so the §5.3 connection never cuts a weigh-in short | §5.3, §4.3 |
-| V8 | The minimum ESPHome version needed for pairing: 2023.3.0 (research) vs 2024.3.0 (ha-beurer-bf600 README) | docs |
+| V1 | An ESP32 ESPHome proxy bonds with the BF450 before the 0.5 s no-bond drop; proxy sync latency within the 47 s window | ✅ Bonds; a one-slot sync takes ~10 s, two slots ~25 s |
+| V2 | One connection can consent two scale users in a row | ✅ |
+| V3 | The scale stays awake while HA holds the connection for teaching, and each step-off/step-on yields a live reading | ✅ |
+| V4 | 0x1D18 service data and local name are visible with passive scanning | ❌ Name and UUID yes; the pending-slot list is only in the scan response (#22) |
+| V5 | Frames are unchanged when the scale display is set to lb/st | ✅ Frames stay in kg, but an lb weigh-in wasn't flagged pending (#26) |
+| V6 | Scale and proxy behaviour after a factory reset with an existing bond | ❌ The proxy's stale bond makes bonding fail; HA can't recover by itself (#23) |
+| V7 | The ~14 s "reading final" and ~25 s thresholds hold, so no connection cuts a weigh-in short | ⚠️ The slot appears after ~10 s; connecting earlier (after a restart) aborted a weigh-in (#24); post-disconnect advertisements count as a wake (#25) |
+| V8 | The minimum ESPHome version needed for pairing | ESPHome 2025.5.1 and 2026.9.1 work; the true minimum wasn't tested |
 
 ## 9. Follow-ups (not v1)
 
