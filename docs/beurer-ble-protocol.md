@@ -604,7 +604,14 @@ consent slot 1 (`20 02 01`) → its stored readings, all in one connection.
 **Teaching (V3).** While a scale user is consented, the scale stays awake (154 s in one
 session) and every step-off/step-on sends a live reading (2A9D → 2A9C → FFF5 → FFF6 →
 FFF4 `01`). The first reading after creating a scale user can arrive while HA is still
-subscribing: subscribe to the reading characteristics first.
+subscribing: subscribe to the reading characteristics first. **One reading is enough:** a
+scale user taught with a single reading was recognised at the next weigh-in. The
+step-on that wakes the scale for the create flow can be that reading. The scale takes a
+new weigh-in only after it has shown all results and the display has gone dark (the
+Bluetooth icon may stay on); stepping on earlier isn't measured.
+
+**Deleting a scale user.** In the same connection as a sync: consent as the removed
+scale user (a second consent), then UCP `03` → `20 03 01`; the slot is gone.
 
 **Display unit (V5).** Settings (FFF0) can be written **without consent**:
 `ff 00 ff 1e 00` → `ff 01 ff 1e 00` switches the display to lb at once, and writing the
