@@ -36,7 +36,7 @@ Home Assistant discovers untested models too, and setup warns you that the model
 
 Step on the scale once. Home Assistant discovers it and offers to set it up; confirm it. You can also add it under **Settings → Devices & services → Add integration → Beurer Scales**, which lists the Beurer scales Home Assistant has seen nearby.
 
-Setting up the scale doesn't connect to it, so the scale doesn't need to be awake. The scale gets its own device with a **Battery** sensor and a **Last sync** sensor (diagnostic). Then add scale users.
+Setting up the scale doesn't connect to it, so the scale doesn't need to be awake. The scale gets its own device with a **Battery** sensor and a **Last sync** sensor and a **Pending deletions** sensor (both diagnostic). Then add scale users.
 
 ## Scale users
 
@@ -47,10 +47,10 @@ Both ask for a **person** and a **name**. Both are optional, but you need at lea
 ### Create a new scale user
 
 1. Enter the person or name, then the profile: birth date (age 10 to 100), height (100 to 220 cm), gender and activity level. The scale uses the profile to compute body composition.
-2. Step on the scale to wake it when asked. The flow waits up to 3 minutes. Home Assistant then connects and creates the scale user on the scale. It picks the consent code itself and stores it; you never need to know it.
-3. **Teaching.** While Home Assistant stays connected, the new scale user steps off the scale and on again, standing still until the result shows ("reading 1 of 3"). Each reading teaches the scale that person's weight so it recognises them later. After each reading you can take another one or finish; after the third reading the flow finishes on its own.
+2. **One step-on.** The new scale user steps on the scale when asked and **stays on until the display goes dark**. The flow waits up to 3 minutes for that. The step-on wakes the scale; Home Assistant connects and creates the scale user on the scale while they stand there. It picks the consent code itself and stores it; you never need to know it.
+3. **Teaching.** The flow shows its progress (connecting, creating the scale user, measuring) and ends with the measured weight. That one reading teaches the scale the person's weight, so it recognises them later; there are no further readings. The scale takes the next weigh-in only after it has shown all results and the display has gone dark (the Bluetooth icon may stay lit), so wait for that before anyone steps on again.
 
-If the scale is full, the flow stops and asks you to remove a scale user first. If you cancel the flow, or nobody steps on the scale for the first teaching reading, Home Assistant deletes the new scale user from the scale again so it doesn't confuse recognition. If teaching times out or the Bluetooth connection breaks after at least one reading, the scale user is kept with the readings taken so far. If the connection breaks before the first reading, Home Assistant deletes the new scale user at the scale's next wake. A connection that breaks usually means the proxy is too far from the scale.
+If the scale is full, the flow stops and asks you to remove a scale user first. If you cancel the flow, or the scale delivers no reading in time, Home Assistant deletes the new scale user from the scale again so it doesn't confuse recognition. If the Bluetooth connection breaks before the reading, Home Assistant deletes the new scale user at the scale's next wake. A connection that breaks usually means the proxy is too far from the scale.
 
 ### Adopt an existing slot
 
@@ -63,6 +63,8 @@ Use **Reconfigure** on the scale user. Changing only the name or the person take
 ### Remove a scale user
 
 Delete the scale user's subentry. Its device and sensors disappear from Home Assistant right away. The scale user itself is deleted from the scale at the next wake, after the weigh-in is final, which frees the slot. If the scale refuses that deletion in the connection that synced someone's weigh-in, Home Assistant tries again at a wake where nobody it manages has new readings.
+
+While the deletion is waiting, the **Pending deletions** sensor on the scale's device shows how many scale users are still to be deleted (the attribute `slots` lists them) and drops to 0 once the scale confirmed it; the log then says `Deleted slot N`. If it is still not done after several wakes, Home Assistant raises a repair issue. The usual causes are that Home Assistant can't connect to the scale: Bluetooth scanning is passive, the proxy is too far away, or the proxy still holds an old bond.
 
 ## Everyday weighing
 
@@ -97,7 +99,7 @@ Problems that need your action appear under **Settings → System → Repairs**.
 | Can't pair through this Bluetooth path | The adapter or proxy that reached the scale couldn't bond with it. | Add an ESPHome proxy or make the host adapter pairable. Clears after the next successful sync. |
 | Scale reports weights in lb or st | The scale's display unit isn't kg. Those readings aren't recorded. | Set the scale back to kg, for example in the Beurer app. Home Assistant never changes scale settings. Clears with the next reading in kg. |
 
-**Create the scale user again** creates it on the scale with the stored profile and a new consent code, followed by teaching. The scale may choose a different slot; the sensors and their history stay the same.
+**Create the scale user again** creates it on the scale with the stored profile and a new consent code, followed by the same one-step-on teaching. The scale may choose a different slot; the sensors and their history stay the same.
 
 ## Debug logs
 

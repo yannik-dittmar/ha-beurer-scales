@@ -90,8 +90,10 @@ from .protocol.session import ScaleSession
 from .repairs import (
     ScaleUserIssue,
     async_clear_scale_user_issues,
+    async_create_deletion_issue,
     async_create_pairing_issue,
     async_create_unit_issue,
+    async_delete_deletion_issue,
     async_delete_pairing_issue,
     async_delete_unit_issue,
     async_raise_scale_user_issue,
@@ -109,6 +111,9 @@ RETRY_DELAY = 15.0
 # progress: connecting would abort it. The scale appends its slot 4–10 s after
 # stepping on; wait this long for that (ADR 0008, V7).
 WEIGH_IN_FINAL_DELAY = 25.0
+
+# Wakes with a deletion still pending before a repair issue is raised (#29).
+DELETION_FAILING_WAKES = 3
 # HA's sessions end this long before the scale would fall asleep by itself, so
 # work started late in a wake (at `WEIGH_IN_FINAL_DELAY`) still disconnects
 # cleanly.
@@ -220,6 +225,8 @@ class ScaleCoordinator:
         # consent of a connection: their next consent must be a connection's
         # first (design §8, V2).
         self._refused_later: set[int] = set()
+        # Wakes that began with a deletion pending, since one last ran (#29).
+        self._deletion_wakes = 0
         # What this wake's last slot list showed as pending, managed or not.
         self._managed_pending: list[int] = []
         self._unmanaged_pending: list[int] = []
@@ -233,7 +240,9 @@ class ScaleCoordinator:
         self._logged_advertisements: set[tuple[Any, ...]] = set()
         self._policy = ReadingPolicy(model=self.model)
         self._reading_log = reading_log_store(hass, entry.entry_id)
-        self.pending_deletions = PendingDeletions(hass, entry.entry_id)
+        self.pending_deletions = PendingDeletions(
+            hass, entry.entry_id, self._async_pending_deletions_changed
+        )
         self.wakes = WakeTracker(
             hass,
             self._async_on_wake,
@@ -632,10 +641,37 @@ class ScaleCoordinator:
             # to check (ADR 0008). A slot appended to a later scan response
             # still syncs in `_async_on_advertisement`.
             return
+        self._async_count_deletion_wake()
         # One moment per wake for the sync of slots pending before it, the
         # pending deletions and the user-list check, so they share one
         # connection.
         wake.async_call_at(WEIGH_IN_FINAL_DELAY, self._async_after_weigh_in)
+
+    @callback
+    def _async_count_deletion_wake(self) -> None:
+        """Count a wake that starts with a deletion still pending (#29).
+
+        After `DELETION_FAILING_WAKES` such wakes without the deletion having
+        run, a repair issue names the likely causes.
+        """
+        if not self.pending_deletions:
+            return
+        if self._deletion_wakes >= DELETION_FAILING_WAKES:
+            async_create_deletion_issue(
+                self.hass,
+                self.entry,
+                self.pending_deletions.slots,
+                self._deletion_wakes,
+            )
+        self._deletion_wakes += 1
+
+    @callback
+    def _async_pending_deletions_changed(self) -> None:
+        """A deletion was added or has run: update the entities and the issue."""
+        if not self.pending_deletions:
+            self._deletion_wakes = 0
+            async_delete_deletion_issue(self.hass, self.entry)
+        self._async_update_listeners()
 
     @callback
     def _async_after_weigh_in(self) -> None:
@@ -740,7 +776,7 @@ class ScaleCoordinator:
                     err,
                 )
                 return
-            _LOGGER.debug("Deleted slot %s on %s", deletion.slot, self.address)
+            _LOGGER.info("Deleted slot %s on %s", deletion.slot, self.address)
             first = False
             self._refused_later.discard(deletion.slot)
             await self.pending_deletions.async_discard(deletion)

@@ -49,7 +49,7 @@ A reading the scale assigned to a scale user with uncertainty (the display shows
 A weigh-in that matches no scale user. The scale stores nothing for it and never delivers it.
 
 **Teaching**:
-Taking readings while a scale user is connected and consented, so the scale learns that scale user's weight and recognises them afterwards.
+Taking one reading while a new scale user is connected and consented, so the scale learns that scale user's weight and recognises them afterwards. The step-on that wakes the scale for the create flow is that reading; there are no further ones (ADR 0010).
 
 ### Synchronisation
 
@@ -64,3 +64,6 @@ A slot that the scale's scan response lists as having unsynced readings (the slo
 
 **Sync**:
 One connection during a wake window that collects the pending readings of one or more slots.
+
+**Stale bond**:
+A bond the host's Bluetooth path (an ESPHome proxy or adapter) still holds for a scale that has forgotten it, which happens after a factory reset. Bonding fails until the path drops it. The integration removes it from an ESPHome proxy without a connection and connects again.

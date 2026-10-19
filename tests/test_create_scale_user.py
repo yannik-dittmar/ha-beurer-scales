@@ -52,18 +52,45 @@ async def after_progress(
     raise AssertionError(f"the flow is still at {step_id}")
 
 
-async def submit_and_wake(
-    hass: HomeAssistant, flow_id: str, scale: FakeScale, user_input: dict[str, Any]
+async def through_progress(
+    hass: HomeAssistant, flow_id: str, step_id: str, seen: list[str] | None = None
 ) -> dict[str, Any]:
-    """Submit the create form, step on the scale and return the next flow result."""
+    """Run the flow on from progress step `step_id` to "measuring" or its end.
+
+    `seen` collects the progress steps the flow showed on the way.
+    """
+    result = await after_progress(hass, flow_id, step_id)
+    while (
+        result["type"] is FlowResultType.SHOW_PROGRESS
+        and result["step_id"] != "create_measure"
+    ):
+        if seen is not None:
+            seen.append(result["step_id"])
+        result = await after_progress(hass, flow_id, result["step_id"])
+    if seen is not None and result["type"] is FlowResultType.SHOW_PROGRESS:
+        seen.append(result["step_id"])
+    return result
+
+
+async def submit_and_wake(
+    hass: HomeAssistant,
+    flow_id: str,
+    scale: FakeScale,
+    user_input: dict[str, Any],
+    seen: list[str] | None = None,
+) -> dict[str, Any]:
+    """Submit the create form, step on the scale and run the flow on.
+
+    Returns the flow's result once it is measuring, or when it ended earlier.
+    """
     result = await hass.config_entries.subentries.async_configure(flow_id, user_input)
     assert result["type"] is FlowResultType.SHOW_PROGRESS
-    assert result["progress_action"] == "create"
+    assert result["progress_action"] == "create_wake"
     scale.wake()
     async_get_advertisement_callback(hass)(
         scale_advertisement(service_data=scale.service_data())
     )
-    return await after_progress(hass, flow_id, "create_wake")
+    return await through_progress(hass, flow_id, "create_wake", seen)
 
 
 def teaching_reading() -> FakeReading:
@@ -75,24 +102,20 @@ def teaching_reading() -> FakeReading:
 async def step_off_and_on(
     hass: HomeAssistant, flow_id: str, scale: FakeScale, slot: int
 ) -> dict[str, Any]:
-    """Weigh in during teaching; return the flow's next result."""
+    """The person on the scale gets their reading; return the flow's next result."""
     scale.weigh_in(slot, teaching_reading())
-    return await after_progress(hass, flow_id, "teach")
+    return await after_progress(hass, flow_id, "create_measure")
 
 
 async def create_with_one_reading(
     hass: HomeAssistant, flow_id: str, scale: FakeScale, user_input: dict[str, Any]
 ) -> dict[str, Any]:
-    """Create a scale user, teach it once and finish."""
+    """Create a scale user with the one step-on; return the flow's final result."""
     result = await submit_and_wake(hass, flow_id, scale, user_input)
-    assert result["step_id"] == "teach", result
+    assert result["step_id"] == "create_measure", result
     assert scale.client is not None
     assert scale.client.consented_slot is not None
-    result = await step_off_and_on(hass, flow_id, scale, scale.client.consented_slot)
-    assert result["step_id"] == "teach_more", result
-    return await hass.config_entries.subentries.async_configure(
-        flow_id, {"next_step_id": "teach_done"}
-    )
+    return await step_off_and_on(hass, flow_id, scale, scale.client.consented_slot)
 
 
 async def test_create_registers_the_scale_user_and_writes_its_profile(

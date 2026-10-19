@@ -10,6 +10,7 @@ import asyncio
 import pytest
 from homeassistant.components.bluetooth import async_get_advertisement_callback
 from homeassistant.core import HomeAssistant
+from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from . import frames
@@ -72,4 +73,4 @@ async def test_a_flow_connects_once_the_paths_settled(
 
     result = await after_progress(hass, result["flow_id"], "create_wake")
     assert fake_scale.connection_attempts == 1
-    assert result["step_id"] == "teach"
+    assert result["type"] is FlowResultType.SHOW_PROGRESS

@@ -156,9 +156,15 @@ async def inject_advertisement(
 def fake_scale() -> Iterator[FakeScale]:
     """A sleeping BF450 behind the Bluetooth boundary; HA connects to it."""
     scale = FakeScale(address=SCALE_ADDRESS)
-    with patch(
-        "custom_components.beurer_scales.protocol.session.establish_connection",
-        scale.establish_connection,
+    with (
+        patch(
+            "custom_components.beurer_scales.protocol.session.establish_connection",
+            scale.establish_connection,
+        ),
+        patch(
+            "custom_components.beurer_scales.connection.async_remove_bond",
+            scale.remove_proxy_bond,
+        ),
     ):
         yield scale
 

@@ -21,7 +21,7 @@ from .conftest import (
 from .fake_scale import FakeReading, FakeScale
 from .test_sync import WEIGHT, local_now, state
 from .test_create_scale_user import step_off_and_on
-from .test_teach_scale_user import SLOT, choose, start_teaching
+from .test_teach_scale_user import SLOT, start_teaching
 from .test_unrecognised_weigh_in import setup_anna, unrecognised_notifications
 
 
@@ -64,7 +64,6 @@ async def test_the_advertising_after_a_teaching_session_is_not_a_weigh_in(
     """No notification and no user-list read, although the scale goes on for 26 s."""
     result = await start_teaching(hass, loaded_scale, fake_scale)
     await step_off_and_on(hass, result["flow_id"], fake_scale, SLOT)
-    await choose(hass, result["flow_id"], "teach_done")
     await hass.async_block_till_done()
     assert list(fake_scale.users) == [SLOT]
     attempts = fake_scale.connection_attempts

@@ -28,6 +28,7 @@ Result of the design session on 2026-10-16. Terms are defined in [`CONTEXT.md`](
   - A proxy without pairing support raises `NotImplementedError` on pair. Show it as its own clear error.
 - Every session sits inside the ~47 s wake window: cap the whole session with a timeout, limit connection attempts, and always disconnect in `finally`.
 - Connect no earlier than 1.5 s after the wake starts. Proxies report the first advertisements at different times, and HA picks the path from the proxies that have reported the scale. Connecting at the very first advertisement left HA a single, distant proxy whose link broke (#17).
+- A failed bond is recognised from the pairing error of any connect attempt: bleak-retry-connector raises only the last error, which is just "Disconnected" because the scale ends the link after a bond error. `open_session` then calls its `remove_bond` hook and connects again once. `connection.async_open_session` passes `bond.async_remove_bond(hass, device)`, which asks the ESPHome proxy the scale was found through to drop its bond. A local adapter can't unpair without a connection, so there the failure stands and the repair explains the manual removal. The factory reset in the configure menu (#30) calls the same `async_remove_bond`.
 - A session watches the link. When it closes, every wait in the session (a response, a live reading) ends at once with `ConnectionLost` instead of running into its timeout.
 
 ## 4. Scale user lifecycle
@@ -49,7 +50,7 @@ The form shared by both paths:
 1. Form as above.
 2. Progress step "Step on the scale to wake it". It waits for the wake through the per-advert callback, with its own timeout (~3 min), because the flow framework has none.
 3. Connect and bond. Read the user list and abort if there is no free slot. Register the scale user with a random consent code (1111–9998). Consent and write the profile.
-4. **Teaching**, in the same connection. A progress step says "Step off and on again: reading k of 3". Each live reading counts (2A9D → … → FFF4 `01`). The user can finish after 1 reading, and the step has its own timeout. After each reading a menu offers another reading or finishing (a progress step can't have buttons); the per-reading timeout keeps running while it is open. A timeout before the first reading deletes the scale user; after one, it keeps the scale user and the flow says teaching ended early. A broken link ends teaching the same way, except that before the first reading the scale user can't be deleted without a link: the deletion is queued like a removed scale user's (§4.3) and runs at the next wake.
+4. **Teaching**, in the same connection, from one step-on (ADR 0010). The form is followed by progress steps "connecting" (the instruction: step on and stay on until the display goes dark; that step-on wakes the scale), "creating the scale user" and "measuring". The flow waits for one live reading (2A9D → … → FFF4 `01`), with a timeout. There is no reading counter and no menu. The flow ends with the measured weight (create entry description, or the abort text of the repair fix flows). A timeout before the reading deletes the scale user. A broken link does the same, except that the scale user can't be deleted without a link: the deletion is queued like a removed scale user's (§4.3) and runs at the next wake. The texts tell the user to wait for the dark display before stepping on again.
 5. Disconnect and create the subentry.
 
 **Abort or failure after step 3:** delete the scale user on the scale (UCP `03`, while still consented) before disconnecting. A half-created scale user that HA doesn't track would steal recognition from the others.
@@ -69,6 +70,8 @@ A name-only change does not need the scale.
 ### 4.3 Remove scale user
 
 HA removes the subentry immediately. The integration remembers `(slot, consent code)` in `Store` as a pending deletion. At the next wake of any kind, after the weigh-in is final (same timing rule as §5.3), it connects, consents and deletes the scale user. If consent fails as the first consent of the connection, the code is wrong and the request is dropped. If it fails as a later consent (after a sync, or after another deletion), the scale may only allow one consent per connection *(V2, §8)*: the request is kept and waits for a wake where it can be the connection's first consent, i.e. one without a managed slot pending.
+
+While deletions wait, the **Pending deletions** diagnostic sensor of the scale device shows their count and slots, and drops to 0 after the deletion, which is logged at info level. The coordinator counts the wakes that began with a deletion pending (in memory; a restart resets it). When three wakes passed without the deletion, the next wake raises the `deletion_failing` repair issue; it clears once nothing is pending.
 
 ## 5. Syncing
 
@@ -124,7 +127,9 @@ At ~25 s into a wake the weigh-in is final (the scale appends its slot 4–10 s 
 | Wrong consent code | consent `20 02 04` + slot present in the user list | Fixable repair → adopt again with the code / create again / remove scale user |
 | Scale user deleted on the scale | consent `20 02 04` or §5.3 check: slot missing | Fixable repair → create again / remove scale user |
 | Factory reset | user list empty | Same repair, plus one automatic `unpair()` → `pair()` (the scale lost its bond keys) |
-| Pairing impossible on this path | pair error / `NotImplementedError` | Repair: add an ESPHome proxy or make the host adapter pairable |
+| Stale bond on the path (the scale was factory-reset) | a pairing error in any connect attempt, not only the final message | Remove the path's bond (ESPHome `bluetooth_device_unpair`, no connection needed) and connect again once; if that fails too, the pairing repair below |
+| Pairing impossible on this path | pair error / `NotImplementedError` | Repair: add an ESPHome proxy or make the host adapter pairable; the text mentions a stale bond after a factory reset |
+| Removed scale user not deleted for several wakes (#29) | a wake starts with the deletion still pending, three wakes in a row | Warning repair (not fixable): likely causes are passive scanning, a weak proxy or a stale bond (#22, #23). Clears when the deletions have run |
 | Scale reports a unit other than kg | settings / frames | Warning. v1 never writes scale settings. |
 
 Repair fix flows forward to the scale user's subentry flows via `next_flow`.
@@ -156,6 +161,7 @@ Repair fix flows forward to the scale user's subentry flows via `next_flow`.
 **Scale device:**
 - Battery (%), read at every sync.
 - Last sync (timestamp, diagnostic).
+- Pending deletions (count, diagnostic; attribute `slots`): removed scale users not yet deleted on the scale (§4.3).
 
 ## 8. Hardware verification (done 2026-10-19, #17)
 
@@ -165,7 +171,7 @@ Results are in the protocol doc §9.6. Where a result breaks this design, the fo
 |---|---|---|
 | V1 | An ESP32 ESPHome proxy bonds with the BF450 before the 0.5 s no-bond drop; proxy sync latency within the 47 s window | ✅ Bonds; a one-slot sync takes ~10 s, two slots ~25 s |
 | V2 | One connection can consent two scale users in a row | ✅ |
-| V3 | The scale stays awake while HA holds the connection for teaching, and each step-off/step-on yields a live reading | ✅ |
+| V3 | The scale stays awake while HA holds the connection for teaching, and a step-on yields a live reading; one reading teaches the scale user | ✅ |
 | V4 | 0x1D18 service data and local name are visible with passive scanning | ❌ Name and UUID yes; the pending-slot list is only in the scan response (#22) |
 | V5 | Frames are unchanged when the scale display is set to lb/st | ✅ Frames stay in kg, but an lb weigh-in wasn't flagged pending (#26) |
 | V6 | Scale and proxy behaviour after a factory reset with an existing bond | ❌ The proxy's stale bond makes bonding fail; HA can't recover by itself (#23) |
