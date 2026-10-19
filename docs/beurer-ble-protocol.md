@@ -560,7 +560,7 @@ subscriptions ~4.6 s (each GATT op ~0.4 s); consent → first frame 0.4 s.
 - Exact length of the awake/advertising window after a weigh-in.
 - FFF3 and FFF8 on the BF450: the app never uses them here (§9.1); their purpose is unknown.
 - Confirm the custom1 byte 4 hypothesis (more users, real strangers).
-- Whether lb/st mode never flags the pending slot, or only did so once (§9.6).
+- Whether lb/st mode ever fails to flag the pending slot: seen once, not reproduced (§9.6).
 
 ### 9.6 Through an ESPHome Bluetooth proxy (2026-10-19, design §8 V1–V8)
 
@@ -622,7 +622,8 @@ old value back restores kg. In lb mode the frames are **unchanged**: the weight 
 in kg (flags `0x02`, 0.005 kg resolution). The display unit is display-only. But the one
 weigh-in taken in lb mode was stored for its slot **without the slot being flagged
 pending** in the scan response for the rest of the wake; it was delivered at the next
-consent.
+consent. This was **not reproduced**: a later lb weigh-in on 2026-10-19 synced normally.
+HA ignores the display unit.
 
 **Factory reset with an existing bond (V6).** The proxy still held the old bond, the
 scale didn't. Bonding failed with ESP-IDF auth error 97 (most likely

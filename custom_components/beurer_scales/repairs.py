@@ -27,7 +27,6 @@ from .const import (
 )
 
 ISSUE_PAIRING_IMPOSSIBLE = "pairing_impossible"
-ISSUE_UNSUPPORTED_UNIT = "unsupported_unit"
 ISSUE_DELETION_FAILING = "deletion_failing"
 ISSUE_NO_SCAN_RESPONSE = "no_scan_response"
 
@@ -62,26 +61,12 @@ def async_delete_pairing_issue(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 
 @callback
-def async_create_unit_issue(hass: HomeAssistant, entry: ConfigEntry, unit: str) -> None:
-    """The scale reported weights in `unit`, not kg; they were not used.
+def async_delete_obsolete_unit_issue(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Remove the "reports weights in lb or st" issue an older version raised.
 
-    Advisory only: v1 never writes scale settings, so the user sets the scale's
-    display back to kg (design §6).
+    The display unit never reaches measurement frames (design §6), so the check
+    is gone; its issue would otherwise stay until dismissed.
     """
-    ir.async_create_issue(
-        hass,
-        DOMAIN,
-        _issue_id("unit", entry),
-        is_fixable=False,
-        severity=ir.IssueSeverity.WARNING,
-        translation_key=ISSUE_UNSUPPORTED_UNIT,
-        translation_placeholders={"name": entry.title, "unit": unit},
-    )
-
-
-@callback
-def async_delete_unit_issue(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """The scale reports kg again."""
     ir.async_delete_issue(hass, DOMAIN, _issue_id("unit", entry))
 
 

@@ -26,6 +26,7 @@ Home Assistant discovers untested models too, and setup warns you that the model
   - **Not supported: Home Assistant OS with only a built-in or USB Bluetooth adapter.** Home Assistant registers no pairing agent there, so the adapter can't bond, and this integration doesn't register its own. Add an ESPHome proxy instead.
   - Shelly devices can't be used as a proxy for this scale: they can't connect to it.
 - **Home Assistant must be the only client for its scale users.** Don't use a scale user that Home Assistant manages with the Beurer app (or any other app) as well. Whichever client syncs first takes the readings, so your history would be split. Duplicate scale users for the same person also make the scale unsure who is standing on it. Other people can keep using the Beurer app with their own scale users on the same scale; Home Assistant ignores those slots.
+- **The scale's display unit (kg, lb or st) doesn't matter.** The scale always sends weights in kg, and Home Assistant converts them to your unit system.
 
 ## Installation
 
@@ -104,7 +105,6 @@ Problems that need your action appear under **Settings → System → Repairs**.
 | Scale factory-reset | The scale lists no scale users at all. Home Assistant renews the Bluetooth bond once by itself. | Create the scale user again; remove the scale user from Home Assistant |
 | Can't pair through this Bluetooth path | The adapter or proxy that reached the scale couldn't bond with it. | Add an ESPHome proxy or make the host adapter pairable. Clears after the next successful sync. |
 | Home Assistant sees no pending weigh-ins | Three wakes in a row passed without a scan response from the scale, so Home Assistant can't tell who stepped on. | Set the proxy's Bluetooth scanning mode to Active (ESPHome entry, **Configure**). Clears when a scan response arrives. |
-| Scale reports weights in lb or st | The scale's display unit isn't kg. Those readings aren't recorded. | Set the scale back to kg, for example in the Beurer app. Home Assistant never changes scale settings. Clears with the next reading in kg. |
 
 **Create the scale user again** creates it on the scale with the stored profile and a new consent code, followed by the same one-step-on teaching. The scale may choose a different slot; the sensors and their history stay the same.
 

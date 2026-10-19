@@ -79,7 +79,6 @@ from .protocol.errors import (
     ScaleError,
 )
 from .protocol.frames import (
-    WeightUnit,
     decode_pending_slots,
     decode_slot_list_in_packet,
 )
@@ -98,11 +97,9 @@ from .repairs import (
     async_create_deletion_issue,
     async_create_no_scan_response_issue,
     async_create_pairing_issue,
-    async_create_unit_issue,
     async_delete_deletion_issue,
     async_delete_no_scan_response_issue,
     async_delete_pairing_issue,
-    async_delete_unit_issue,
     async_raise_scale_user_issue,
     async_scale_user_issue,
 )
@@ -329,7 +326,7 @@ class ScaleCoordinator:
         `sync_start` (aware, default now) is when the sync that collected the
         readings began; readings much older than it are backlog (ADR 0005).
         """
-        readings = self._async_kg_only(r for r in readings if r.slot == slot)
+        readings = [r for r in readings if r.slot == slot]
         if not readings:
             return
         start = dt_util.as_local(sync_start or dt_util.now()).replace(tzinfo=None)
@@ -358,26 +355,6 @@ class ScaleCoordinator:
             return
         self._latest[slot] = result.fresh[-1]
         self._async_update_listeners()
-
-    @callback
-    def _async_kg_only(self, readings: Iterable[Reading]) -> list[Reading]:
-        """Drop readings in another unit than kg and warn about them.
-
-        v1 never writes scale settings, so the user switches the display back.
-        """
-        readings = list(readings)
-        kg = [r for r in readings if r.unit is WeightUnit.KG]
-        if other := [r for r in readings if r.unit is not WeightUnit.KG]:
-            _LOGGER.warning(
-                "Discarding %s reading(s) of %s in %s; only kg is supported",
-                len(other),
-                self.address,
-                other[-1].unit,
-            )
-            async_create_unit_issue(self.hass, self.entry, str(other[-1].unit))
-        elif kg:
-            async_delete_unit_issue(self.hass, self.entry)
-        return kg
 
     async def _async_check_user_list(
         self, session: ScaleSession, rejected_slot: int | None = None

@@ -2,7 +2,6 @@
 
 import pytest
 from freezegun.api import FrozenDateTimeFactory
-from homeassistant.const import STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 from pytest_homeassistant_custom_component.common import (
@@ -102,54 +101,20 @@ async def test_other_connection_failures_raise_no_pairing_issue(
     assert pairing_issue(hass, anna) is None
 
 
-def unit_issue(hass: HomeAssistant, entry: MockConfigEntry) -> ir.IssueEntry | None:
-    """The scale's "unit isn't kg" warning, if raised."""
-    return ir.async_get(hass).async_get_issue(DOMAIN, f"unit_{entry.entry_id}")
-
-
-async def test_a_reading_in_pounds_is_not_written_as_kg_and_raises_a_warning(
-    hass: HomeAssistant, anna: MockConfigEntry, fake_scale: FakeScale
+async def test_a_unit_issue_from_an_older_version_is_removed_at_setup(
+    hass: HomeAssistant, anna: MockConfigEntry
 ) -> None:
-    """With the display set to lb, HA warns instead of showing a wrong weight."""
-    fake_scale.display_unit = "lb"
-    weigh_in(fake_scale)
+    """The lb/st check is gone (design §6); its leftover issue is cleared."""
+    issue_id = f"unit_{anna.entry_id}"
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        issue_id,
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="unsupported_unit",
+    )
 
-    await wake_scale(hass, fake_scale)
+    await hass.config_entries.async_reload(anna.entry_id)
 
-    assert state(hass, WEIGHT).state == STATE_UNKNOWN
-    issue = unit_issue(hass, anna)
-    assert issue is not None
-    assert issue.translation_key == "unsupported_unit"
-    assert issue.severity is ir.IssueSeverity.WARNING
-    assert not issue.is_fixable
-    assert issue.translation_placeholders == {"name": "BF450", "unit": "lb"}
-    # The readings were collected, so the scale doesn't offer them again.
-    assert fake_scale.service_data() == {"00001d18-0000-1000-8000-00805f9b34fb": b""}
-
-
-async def test_the_unit_warning_clears_once_readings_are_in_kg_again(
-    hass: HomeAssistant, anna: MockConfigEntry, fake_scale: FakeScale
-) -> None:
-    """Switching the display back to kg ends the warning."""
-    fake_scale.display_unit = "lb"
-    weigh_in(fake_scale)
-    await wake_scale(hass, fake_scale)
-    assert unit_issue(hass, anna) is not None
-
-    fake_scale.display_unit = "kg"
-    weigh_in(fake_scale)
-    await wake_scale(hass, fake_scale)
-
-    assert unit_issue(hass, anna) is None
-    assert state(hass, WEIGHT).state == "78.4"
-
-
-async def test_kg_readings_raise_no_unit_warning(
-    hass: HomeAssistant, anna: MockConfigEntry, fake_scale: FakeScale
-) -> None:
-    """The BF450 in its default kg mode."""
-    weigh_in(fake_scale)
-
-    await wake_scale(hass, fake_scale)
-
-    assert unit_issue(hass, anna) is None
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None

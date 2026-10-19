@@ -63,7 +63,6 @@ SLOT_COUNT = 8
 # "fails": the path tries to bond and fails, e.g. a BlueZ adapter without an agent.
 Pairing = Literal["supported", "unsupported", "fails"]
 PairingFailure = Literal["bluez", "kernel"]
-DisplayUnit = Literal["kg", "lb", "st"]
 # How the scale answers a consent for another slot in a connection that already
 # consented one. Unverified on a BF450 (design §8, V2), so the fake can do each.
 SecondConsent = Literal["allowed", "rejected", "dropped"]
@@ -139,9 +138,6 @@ class FakeScale:
     # Every User Control Point request written to the scale.
     ucp_requests: list[bytes] = field(default_factory=list)
     battery_level: int = 71
-    # The display unit, a scale setting HA never writes. Assumed (design V5): in
-    # lb/st the scale sends 2A9D in imperial units, flags bit 0 set, 0.01 lb.
-    display_unit: DisplayUnit = "kg"
     client: "FakeBleakClient | None" = None
     # Writes to these characteristics misbehave.
     write_failures: dict[str, WriteFailure] = field(default_factory=dict)
@@ -262,8 +258,6 @@ class FakeScale:
         pending once the weigh-in is final (`finish_weigh_in`).
         """
         reading = reading.for_slot(slot)
-        if self.display_unit != "kg":
-            reading = reading.in_pounds()
         if (
             self.client is not None
             and self.connected
@@ -573,20 +567,6 @@ class FakeReading:
     def for_slot(self, slot: int) -> "FakeReading":
         """The same reading, assigned to `slot`."""
         return self._with_weight(slot=slot)
-
-    def in_pounds(self) -> "FakeReading":
-        """The same reading with 2A9D in imperial units (0x2A9D spec)."""
-        frames = []
-        for short_uuid, frame in self.frames:
-            if short_uuid == 0x2A9D:
-                kg = int.from_bytes(frame[1:3], "little") * 0.005
-                raw_lb = round(kg / 0.45359237 / 0.01)
-                frame = (
-                    bytes([frame[0] | 0x01, *raw_lb.to_bytes(2, "little")])
-                    + (frame[3:])
-                )
-            frames.append((short_uuid, frame))
-        return FakeReading(tuple(frames))
 
     def _with_weight(
         self, *, timestamp: datetime | None = None, slot: int | None = None

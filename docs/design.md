@@ -146,7 +146,8 @@ At ~25 s into a wake the weigh-in is final (the scale appends its slot 4–10 s 
 | Pairing impossible on this path | pair error / `NotImplementedError` | Repair: add an ESPHome proxy or make the host adapter pairable; the text mentions a stale bond after a factory reset |
 | Removed scale user not deleted for several wakes (#29) | a wake starts with the deletion still pending, three wakes in a row | Warning repair (not fixable): likely causes are passive scanning, a weak proxy or a stale bond (#22, #23). Clears when the deletions have run |
 | No scan response for several wakes (#22) | three wakes in a row reached the 25 s moment without any scan response | Warning repair (not fixable): set the ESPHome proxy's Bluetooth scanning mode to Active. Clears with the next scan response |
-| Scale reports a unit other than kg | settings / frames | Warning. v1 never writes scale settings. |
+
+The scale's display unit (lb/st) does not matter for HA: measurement frames are always kg (protocol §9.6, V5), so there is no unit check and no repair. v1 never reads or writes scale settings. One weigh-in taken in lb mode was once seen without its slot flagged pending; a clean lb weigh-in on 2026-10-19 synced normally, so it was not reproduced (#26).
 
 Repair fix flows forward to the scale user's subentry flows via `next_flow`.
 
@@ -189,7 +190,7 @@ Results are in the protocol doc §9.6. Where a result breaks this design, the fo
 | V2 | One connection can consent two scale users in a row | ✅ |
 | V3 | The scale stays awake while HA holds the connection for teaching, and a step-on yields a live reading; one reading teaches the scale user | ✅ |
 | V4 | 0x1D18 service data and local name are visible with passive scanning | ❌ Name and UUID yes; the pending-slot list is only in the scan response (#22) |
-| V5 | Frames are unchanged when the scale display is set to lb/st | ✅ Frames stay in kg, but an lb weigh-in wasn't flagged pending (#26) |
+| V5 | Frames are unchanged when the scale display is set to lb/st | ✅ Frames stay in kg. One lb weigh-in wasn't flagged pending, not reproduced (one clean lb weigh-in synced normally, 2026-10-19; #26) |
 | V6 | Scale and proxy behaviour after a factory reset with an existing bond | ❌ The proxy's stale bond makes bonding fail; HA can't recover by itself (#23) |
 | V7 | The ~14 s "reading final" and ~25 s thresholds hold, so no connection cuts a weigh-in short | ⚠️ The slot appears after ~10 s; connecting earlier (after a restart) aborted a weigh-in (#24); post-disconnect advertisements count as a wake (#25) |
 | V8 | The minimum ESPHome version needed for pairing | ESPHome 2025.5.1 and 2026.9.1 work; the true minimum wasn't tested |
