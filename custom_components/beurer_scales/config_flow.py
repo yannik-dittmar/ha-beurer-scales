@@ -1,5 +1,6 @@
 """Config flow for adding a Beurer scale."""
 
+import asyncio
 from typing import Any
 
 import probatio
@@ -18,6 +19,7 @@ from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import callback
 from homeassistant.helpers.selector import BooleanSelector
 
+from .connection import WakeTimeout
 from .const import (
     CONF_MODEL,
     CONF_NOTIFY_UNRECOGNISED,
@@ -26,7 +28,9 @@ from .const import (
     MANUFACTURER,
     SUBENTRY_SCALE_USER,
 )
-from .protocol.models import ScaleModel, model_from_advertisement
+from .factory_reset import async_factory_reset_scale, async_forget_scale_users
+from .protocol.errors import PairingFailed, PairingUnsupported
+from .protocol.models import ScaleModel, model_by_name, model_from_advertisement
 from .scale_user_flow import ScaleUserSubentryFlow
 
 
@@ -152,19 +156,36 @@ class BeurerScalesConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class BeurerScalesOptionsFlow(OptionsFlow):
-    """The scale's options; the coordinator reads them when needed, so no reload."""
+    """The scale's configure menu: its options, and a factory reset."""
+
+    def __init__(self) -> None:
+        """Initialize the flow."""
+        self._reset_task: asyncio.Task[None] | None = None
+        self._reset_failure = "cannot_connect"
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Choose whether HA notifies about unrecognised weigh-ins."""
+        """Choose between the scale's options and a factory reset."""
+        options = ["options"]
+        if model_by_name(self.config_entry.data[CONF_MODEL]).factory_reset_uuid:
+            options.append("factory_reset")
+        return self.async_show_menu(step_id="init", menu_options=options)
+
+    async def async_step_options(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Choose whether HA notifies about unrecognised weigh-ins.
+
+        The coordinator reads the options when needed, so there is no reload.
+        """
         if user_input is not None:
             return self.async_create_entry(data=user_input)
         notify = self.config_entry.options.get(
             CONF_NOTIFY_UNRECOGNISED, DEFAULT_NOTIFY_UNRECOGNISED
         )
         return self.async_show_form(
-            step_id="init",
+            step_id="options",
             data_schema=probatio.Schema(
                 {
                     probatio.Required(
@@ -173,3 +194,63 @@ class BeurerScalesOptionsFlow(OptionsFlow):
                 }
             ),
         )
+
+    async def async_step_factory_reset(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Warn what a factory reset deletes and ask for confirmation."""
+        if user_input is not None:
+            return await self.async_step_factory_reset_wake()
+        return self.async_show_form(step_id="factory_reset")
+
+    async def async_step_factory_reset_wake(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Progress: wait for the step-on that wakes the scale; reset it."""
+        if self._reset_task is None:
+            self._reset_task = self.hass.async_create_task(
+                async_factory_reset_scale(self.hass, self.config_entry)
+            )
+        if not self._reset_task.done():
+            return self.async_show_progress(
+                step_id="factory_reset_wake",
+                progress_action="factory_reset_wake",
+                progress_task=self._reset_task,
+            )
+        task, self._reset_task = self._reset_task, None
+        err = None if task.cancelled() else task.exception()
+        if task.cancelled() or err is not None:
+            self._reset_failure = (
+                _reset_failure_reason(err) if err else "cannot_connect"
+            )
+            return self.async_show_progress_done(next_step_id="factory_reset_failed")
+        return self.async_show_progress_done(next_step_id="factory_reset_done")
+
+    async def async_step_factory_reset_done(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Forget the scale users, which the reset deleted, and offer to add one."""
+        await async_forget_scale_users(
+            self.hass, self.config_entry, self.config_entry.runtime_data
+        )
+        return self.async_abort(reason="factory_reset_done")
+
+    async def async_step_factory_reset_failed(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """The reset didn't happen, or the scale is in an unknown state."""
+        return self.async_abort(reason=self._reset_failure)
+
+    @callback
+    def async_remove(self) -> None:
+        """Stop waiting for the wake when the flow is closed."""
+        if self._reset_task is not None:
+            self._reset_task.cancel()
+
+
+def _reset_failure_reason(err: BaseException) -> str:
+    if isinstance(err, WakeTimeout):
+        return "wake_timeout"
+    if isinstance(err, PairingUnsupported | PairingFailed):
+        return "pairing_unsupported"
+    return "cannot_connect"

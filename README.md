@@ -64,6 +64,12 @@ Use **Reconfigure** on the scale user. Changing only the name or the person take
 
 Delete the scale user's subentry. Its device and sensors disappear from Home Assistant right away. The scale user itself is deleted from the scale at the next wake, after the weigh-in is final, which frees the slot. If the scale refuses that deletion in the connection that synced someone's weigh-in, Home Assistant tries again at a wake where nobody it manages has new readings.
 
+## Factory-reset the scale
+
+Open the scale's **Configure** menu and choose **Factory reset the scale**, for example to start over when the Beurer app created the scale users and their consent codes are unknown. **This deletes every scale user on the scale, including the ones the Beurer app or other clients use.** After you confirm, step on the scale to wake it. Home Assistant resets it, removes the Bluetooth proxy's old bond so the next connection pairs afresh, and removes its own scale users and any pending deletions. Then add a scale user again with **Add scale user**.
+
+Removing the old bond works through an ESPHome Bluetooth proxy. A host adapter can't do it without a connection; remove the scale in the host's Bluetooth settings instead.
+
 ## Everyday weighing
 
 Just step on the scale. If it recognises you, your reading appears on your sensors within seconds:

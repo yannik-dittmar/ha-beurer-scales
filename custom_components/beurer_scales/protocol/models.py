@@ -133,6 +133,9 @@ class ScaleModel:
     activity_level_uuid: str
     # Verified on real hardware; other models get an "untested" warning.
     verified: bool = False
+    # The characteristic whose `00` write factory-resets the scale (§4; BF450:
+    # FFFF/FFF7), or None where it isn't known.
+    factory_reset_uuid: str | None = None
     # The service the app filters on when searching for the model (§1).
     advertised_service_uuid: str = WEIGHT_SCALE_SERVICE_UUID
     # The service holding the custom characteristics (§1, marker `bi`).
@@ -186,6 +189,7 @@ _GATT_FFF1: dict[str, Any] = {
     "user_list_uuid": uuid16(0xFFF1),
     "activity_level_uuid": uuid16(0xFFF2),
     "live_reading_done_uuid": uuid16(0xFFF4),
+    "factory_reset_uuid": uuid16(0xFFF7),
     "slot_count": 8,
 }
 # Custom service 0xFFF0 (no marker `bi`).

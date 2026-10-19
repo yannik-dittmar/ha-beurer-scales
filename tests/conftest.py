@@ -165,6 +165,10 @@ def fake_scale() -> Iterator[FakeScale]:
             "custom_components.beurer_scales.connection.async_remove_bond",
             scale.remove_proxy_bond,
         ),
+        patch(
+            "custom_components.beurer_scales.factory_reset.async_remove_bond",
+            scale.remove_proxy_bond,
+        ),
     ):
         yield scale
 

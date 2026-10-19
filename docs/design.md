@@ -71,6 +71,19 @@ A name-only change does not need the scale.
 
 HA removes the subentry immediately. The integration remembers `(slot, consent code)` in `Store` as a pending deletion. At the next wake of any kind, after the weigh-in is final (same timing rule as §5.3), it connects, consents and deletes the scale user. If consent fails as the first consent of the connection, the code is wrong and the request is dropped. If it fails as a later consent (after a sync, or after another deletion), the scale may only allow one consent per connection *(V2, §8)*: the request is kept and waits for a wake where it can be the connection's first consent, i.e. one without a managed slot pending.
 
+### 4.4 Factory reset
+
+A step in the scale's configure menu (options flow), not an entity: **Factory reset the scale**. It exists for models with a known reset characteristic (`ScaleModel.factory_reset_uuid`, BF450: FFF7).
+
+1. A confirmation form warns that every scale user on the scale is deleted, including ones other apps use. Nothing is touched before it is submitted.
+2. A progress step asks the user to step on the scale. The flow holds the scale (§3), waits for the wake and opens a session on the path it picked: `connection.async_open_session` gets that `BLEDevice` explicitly, so the bond removal below targets the same path.
+3. `ScaleSession.factory_reset()` writes `00` to FFF7. The scale wipes its slots, forgets its bond keys and ends the link.
+4. After the session ends, `bond.async_remove_bond(hass, device)` removes the bond the proxy still holds (§3, #23), so the next connection bonds afresh. Where that is impossible (a local adapter) it is best effort, and the pairing repair explains the manual removal.
+5. Only now, HA forgets its scale users: it clears the pending deletions and removes every scale user subentry. The consent codes are dropped from the coordinator's `subentries_at_setup` first, or the update listener would queue deletions for slots that no longer exist. The removals reload the entry.
+6. The flow ends with "Add scale user" as the next thing to do (an options flow can't open a subentry flow itself).
+
+A failure before the write (no wake, no pairing, no connection) changes nothing in HA. Readings already recorded stay in the history.
+
 ## 5. Syncing
 
 ### 5.1 Trigger

@@ -333,6 +333,13 @@
   "options": {
     "step": {
       "init": {
+        "title": "Configure the scale",
+        "menu_options": {
+          "options": "Scale options",
+          "factory_reset": "Factory reset the scale"
+        }
+      },
+      "options": {
         "title": "Scale options",
         "data": {
           "notify_unrecognised": "Notify about unrecognised weigh-ins"
@@ -340,7 +347,20 @@
         "data_description": {
           "notify_unrecognised": "Send a notification when someone steps on the scale and it recognises them as none of its scale users, so they can be added."
         }
+      },
+      "factory_reset": {
+        "title": "Factory reset the scale",
+        "description": "This deletes every scale user on the scale, including the ones the Beurer app or other clients use. It can't be undone. Home Assistant removes its own scale users as well, and removes the scale's old Bluetooth bond so the next connection pairs afresh. Their readings stay in Home Assistant's history.\n\nSubmit to continue; Home Assistant then asks you to step on the scale."
       }
+    },
+    "progress": {
+      "factory_reset_wake": "Step on the scale to wake it. Home Assistant then connects and resets it. Stay on the scale until the display goes dark."
+    },
+    "abort": {
+      "factory_reset_done": "The scale was reset and its scale users are gone. Choose \"Add scale user\" on the scale's page to create the first one again.",
+      "wake_timeout": "The scale didn't wake up within 3 minutes. Nothing was changed. Start again and step on the scale.",
+      "pairing_unsupported": "The Bluetooth adapter or proxy that reached the scale can't pair with it, so nothing was changed. Use an ESPHome Bluetooth proxy, or make the host adapter pairable. If the scale was factory-reset before, the path may still hold its old bond: Home Assistant can remove that only on an ESPHome proxy.",
+      "cannot_connect": "Home Assistant couldn't reset the scale. Make sure it is in range, then try again. If the display showed a reset, step on the scale again and add a scale user."
     }
   }
 }

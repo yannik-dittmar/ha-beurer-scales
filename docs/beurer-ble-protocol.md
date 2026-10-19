@@ -212,7 +212,9 @@ so the consent code of that user is needed.
 ### Factory reset (`r0`, `BTScaleBF600ResetRepoImpl.kt`)
 Write `[0x00]` to the "reset" characteristic: custom svc / **FFF7** (BF990: FFCF/FFC2).
 This wipes all users. No consent is needed. On the BF450 the user list was empty
-afterwards, and the host had to remove its stale bond and pair again.
+afterwards, and the host had to remove its stale bond and pair again. The integration
+does this from the scale's configure menu (design §4.4): write `00`, let the scale end
+the link, then remove the proxy's bond (§9.6, V6).
 
 ### Scale settings (`h1` read / `i1` update, `BTScaleBF600Settings*RepoImpl.kt`)
 Characteristic: BF450 FFFF/FFF0 (§1). Two layouts:

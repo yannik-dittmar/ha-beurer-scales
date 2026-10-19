@@ -41,6 +41,7 @@ def _uuid(short: int) -> str:
 CURRENT_TIME = _uuid(0x2A2B)
 USER_CONTROL_POINT = _uuid(0x2A9F)
 USER_LIST = _uuid(0xFFF1)
+FACTORY_RESET = _uuid(0xFFF7)
 DATE_OF_BIRTH = _uuid(0x2A85)
 GENDER = _uuid(0x2A8C)
 HEIGHT = _uuid(0x2A8E)
@@ -157,6 +158,8 @@ class FakeScale:
     # a factory reset: bonding fails with auth error 97, the scale ends the link,
     # and bleak-retry-connector's last error is only "Disconnected" (§9.6, V6).
     proxy_bond_stale: bool = False
+    # How often the scale was factory-reset over a connection (FFF7 `00`).
+    resets: int = 0
     # How often a bond was removed on the path without a connection.
     proxy_unpairs: int = 0
     # Pairing on an existing connection fails.
@@ -401,6 +404,12 @@ class FakeBleakClient:
             )
         elif uuid == USER_LIST and data == b"\x00":
             self._send_user_list()
+        elif uuid == FACTORY_RESET and data == b"\x00":
+            self._scale.factory_reset()
+            # The proxy keeps the bond the scale just forgot (§9.6, V6).
+            self._scale.proxy_bond_stale = True
+            self._scale.resets += 1
+            self.drop()
         elif uuid == USER_CONTROL_POINT:
             self._handle_ucp(data)
         elif uuid in PROFILE_CHARACTERISTICS:

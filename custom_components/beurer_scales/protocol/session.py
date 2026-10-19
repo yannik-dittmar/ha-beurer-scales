@@ -377,6 +377,17 @@ class ScaleSession:
         if response.result is not UcpResult.SUCCESS:
             raise UnexpectedResponse(f"delete refused: {response.result.name}")
 
+    async def factory_reset(self) -> None:
+        """Wipe every scale user on the scale (§4): write `00` to the reset
+        characteristic. No consent is needed. The scale forgets its bond keys and
+        ends the link, so do nothing else afterwards."""
+        uuid = self._model.factory_reset_uuid
+        if uuid is None:
+            raise UnexpectedResponse(
+                f"{self._model.name}: no known reset characteristic"
+            )
+        await self._write(uuid, b"\x00")
+
     # --- Syncing readings (protocol doc §3, §9.4b) ---
 
     async def sync(
