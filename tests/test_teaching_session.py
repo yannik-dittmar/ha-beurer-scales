@@ -79,7 +79,8 @@ async def test_teaching_takes_one_reading_and_ends(scale: FakeScale) -> None:
         scale.weigh_in(2, READING)
         await asyncio.wait_for(running, 1)
 
-    assert [r.weight_kg for r in teaching.readings] == [78.4]
+    assert teaching.reading is not None
+    assert teaching.reading.weight_kg == 78.4
 
 
 async def test_teaching_without_any_reading_times_out(scale: FakeScale) -> None:
@@ -89,7 +90,7 @@ async def test_teaching_without_any_reading_times_out(scale: FakeScale) -> None:
         with pytest.raises(TeachingTimeout):
             await teaching.run(await consented(session), timeout=TIMEOUT)
 
-    assert teaching.readings == []
+    assert teaching.reading is None
 
 
 async def test_a_lost_link_before_the_reading_raises(scale: FakeScale) -> None:
@@ -102,4 +103,4 @@ async def test_a_lost_link_before_the_reading_raises(scale: FakeScale) -> None:
         with pytest.raises(ConnectionLost):
             await asyncio.wait_for(running, 1)
 
-    assert teaching.readings == []
+    assert teaching.reading is None

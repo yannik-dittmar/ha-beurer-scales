@@ -5,19 +5,18 @@ own scale users afterwards: their slots are gone, and so are the deletions that
 were waiting for a wake.
 """
 
+from homeassistant.components.bluetooth import async_ble_device_from_address
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
-from homeassistant.components.bluetooth import async_ble_device_from_address
 
 from .bond import async_remove_bond
 from .connection import async_hold_scale, async_open_session, async_wait_for_wake
-from .const import CONF_CONSENT_CODE, SUBENTRY_SCALE_USER
+from .const import CONF_MODEL, SUBENTRY_SCALE_USER
 from .coordinator import ScaleCoordinator
-from .repairs import async_delete_deletion_issue
 from .protocol.errors import ScaleConnectionError
 from .protocol.models import model_by_name
-from .const import CONF_MODEL
+from .repairs import async_delete_deletion_issue
 
 
 async def async_factory_reset_scale(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -47,16 +46,10 @@ async def async_forget_scale_users(
     """Remove every scale user subentry and clear the pending deletions.
 
     Removing a subentry would queue its deletion on the scale; the slots are gone
-    already, so the consent codes are dropped from the coordinator's snapshot
-    first, which is what the update listener compares against.
+    already, so the coordinator forgets the consent codes first.
     """
-    for deletion in coordinator.pending_deletions.all():
-        await coordinator.pending_deletions.async_discard(deletion)
+    await coordinator.async_forget_slots()
     async_delete_deletion_issue(hass, entry)
-    coordinator.subentries_at_setup = {
-        subentry_id: (title, {k: v for k, v in data.items() if k != CONF_CONSENT_CODE})
-        for subentry_id, (title, data) in coordinator.subentries_at_setup.items()
-    }
     for subentry in list(entry.subentries.values()):
         if subentry.subentry_type == SUBENTRY_SCALE_USER:
             hass.config_entries.async_remove_subentry(entry, subentry.subentry_id)

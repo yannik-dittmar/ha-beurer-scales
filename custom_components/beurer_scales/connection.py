@@ -57,10 +57,14 @@ def session_ended_at(hass: HomeAssistant, address: str) -> float | None:
 
     Kept outside the coordinator, which a flow's new scale user reloads.
     """
-    ended: dict[str, float] = hass.data.setdefault(DOMAIN, {}).setdefault(
+    return _session_ends(hass).get(address)
+
+
+def _session_ends(hass: HomeAssistant) -> dict[str, float]:
+    ends: dict[str, float] = hass.data.setdefault(DOMAIN, {}).setdefault(
         _SESSION_ENDED, {}
     )
-    return ended.get(address)
+    return ends
 
 
 class WakeTimeout(Exception):
@@ -165,7 +169,5 @@ async def async_open_session(
             yield session
     finally:
         if opened:
-            hass.data.setdefault(DOMAIN, {}).setdefault(_SESSION_ENDED, {})[address] = (
-                hass.loop.time()
-            )
+            _session_ends(hass)[address] = hass.loop.time()
             async_dispatcher_send(hass, session_ended_signal(address))

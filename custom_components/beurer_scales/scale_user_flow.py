@@ -239,8 +239,7 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
     def _measured_weight(self) -> str:
         """The teaching reading's weight, for the confirmation."""
         reading = self._teaching.reading
-        assert reading is not None
-        return f"{reading.weight_kg:.1f} kg"
+        return "the weight" if reading is None else f"{reading.weight_kg:.1f} kg"
 
     @callback
     def async_remove(self) -> None:
@@ -703,7 +702,7 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
             self.hass,
             self._get_entry().entry_id,
             self._created.slot,
-            self._teaching.readings,
+            [] if self._teaching.reading is None else [self._teaching.reading],
             self._sync_start,
         )
 

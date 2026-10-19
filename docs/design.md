@@ -71,7 +71,7 @@ A name-only change does not need the scale.
 
 HA removes the subentry immediately. The integration remembers `(slot, consent code)` in `Store` as a pending deletion. At the next wake of any kind, after the weigh-in is final (same timing rule as §5.3), it connects, consents and deletes the scale user. If consent fails as the first consent of the connection, the code is wrong and the request is dropped. If it fails as a later consent (after a sync, or after another deletion), the scale may only allow one consent per connection *(V2, §8)*: the request is kept and waits for a wake where it can be the connection's first consent, i.e. one without a managed slot pending.
 
-While deletions wait, the **Pending deletions** diagnostic sensor of the scale device shows their count and slots, and drops to 0 after the deletion, which is logged at info level. The coordinator counts the wakes that began with a deletion pending (in memory; a restart resets it). When three wakes passed without the deletion, the next wake raises the `deletion_failing` repair issue; it clears once nothing is pending.
+While deletions wait, the **Pending deletions** diagnostic sensor of the scale device shows their count and slots, and drops to 0 after the deletion, which is logged at info level. The coordinator counts the wakes that began with a deletion pending (in memory; a restart resets it). The third such wake without the deletion raises the `deletion_failing` repair issue; it clears once nothing is pending.
 
 ### 4.4 Factory reset
 

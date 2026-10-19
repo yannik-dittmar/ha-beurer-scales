@@ -8,6 +8,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.beurer_scales.scale_user_flow import ScaleUserSubentryFlow
 from custom_components.beurer_scales.pending_deletions import PendingDeletion
 
 from .conftest import SCALE_ADDRESS
@@ -156,3 +157,9 @@ async def test_a_lost_link_before_the_reading_deletes_at_the_next_wake(
     assert loaded_scale.runtime_data.pending_deletions.all() == [
         PendingDeletion(slot=SLOT, consent_code=consent_code)
     ]
+
+
+def test_a_missing_teaching_reading_names_no_weight_instead_of_crashing() -> None:
+    """The confirmation never depends on a reading being there."""
+    flow = ScaleUserSubentryFlow()
+    assert flow._measured_weight() == "the weight"

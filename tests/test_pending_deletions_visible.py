@@ -76,13 +76,14 @@ async def test_repeated_failures_raise_a_repair_issue_that_clears(
 ) -> None:
     """Three wakes without the deletion raise the issue; the deletion closes it."""
     await remove_bob(hass, scale)
-    for _ in range(3):
+    for _ in range(2):
         await missed_wake(hass, freezer, fake_scale)
         assert issue(hass, scale) is None
     await missed_wake(hass, freezer, fake_scale)
 
     raised = issue(hass, scale)
     assert raised is not None
+    assert raised.translation_placeholders["wakes"] == "3"
     assert raised.translation_key == "deletion_failing"
     assert raised.translation_placeholders["name"] == "BF450"
     assert raised.is_fixable is False

@@ -97,7 +97,7 @@ def async_create_deletion_issue(
     ir.async_create_issue(
         hass,
         DOMAIN,
-        _issue_id("deletion_failing", entry),
+        _issue_id(ISSUE_DELETION_FAILING, entry),
         is_fixable=False,
         severity=ir.IssueSeverity.WARNING,
         translation_key=ISSUE_DELETION_FAILING,
@@ -112,7 +112,7 @@ def async_create_deletion_issue(
 @callback
 def async_delete_deletion_issue(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """The pending deletions have run, or none is left."""
-    ir.async_delete_issue(hass, DOMAIN, _issue_id("deletion_failing", entry))
+    ir.async_delete_issue(hass, DOMAIN, _issue_id(ISSUE_DELETION_FAILING, entry))
 
 
 @callback
@@ -128,7 +128,7 @@ def async_create_no_scan_response_issue(
     ir.async_create_issue(
         hass,
         DOMAIN,
-        _issue_id("no_scan_response", entry),
+        _issue_id(ISSUE_NO_SCAN_RESPONSE, entry),
         is_fixable=False,
         severity=ir.IssueSeverity.WARNING,
         translation_key=ISSUE_NO_SCAN_RESPONSE,
@@ -142,7 +142,7 @@ def async_delete_no_scan_response_issue(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> None:
     """A scan response arrived."""
-    ir.async_delete_issue(hass, DOMAIN, _issue_id("no_scan_response", entry))
+    ir.async_delete_issue(hass, DOMAIN, _issue_id(ISSUE_NO_SCAN_RESPONSE, entry))
 
 
 # --- Scale user issues: wrong code, deleted, factory reset (#12) ---

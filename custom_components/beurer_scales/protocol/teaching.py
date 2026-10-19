@@ -25,11 +25,6 @@ class Teaching:
         """Prepare to take one reading."""
         self.reading: Reading | None = None
 
-    @property
-    def readings(self) -> list[Reading]:
-        """The readings taken: none, or the one teaching reading."""
-        return [] if self.reading is None else [self.reading]
-
     async def run(self, session: ScaleSession, *, timeout: float | None = None) -> None:
         """Take the live reading of the consented scale user.
 

@@ -676,11 +676,12 @@ class ScaleCoordinator:
     def _async_count_deletion_wake(self) -> None:
         """Count a wake that starts with a deletion still pending (#29).
 
-        After `DELETION_FAILING_WAKES` such wakes without the deletion having
-        run, a repair issue names the likely causes.
+        The `DELETION_FAILING_WAKES`th such wake without the deletion having
+        run raises a repair issue names the likely causes.
         """
         if not self.pending_deletions:
             return
+        self._deletion_wakes += 1
         if self._deletion_wakes >= DELETION_FAILING_WAKES:
             async_create_deletion_issue(
                 self.hass,
@@ -688,7 +689,23 @@ class ScaleCoordinator:
                 self.pending_deletions.slots,
                 self._deletion_wakes,
             )
-        self._deletion_wakes += 1
+
+    async def async_forget_slots(self) -> None:
+        """The scale's slots are gone (factory reset): forget what refers to them.
+
+        Drops the pending deletions and the consent codes of the setup snapshot,
+        which the update listener compares against, so removing the scale user
+        subentries afterwards queues no deletion.
+        """
+        for deletion in self.pending_deletions.all():
+            await self.pending_deletions.async_discard(deletion)
+        self.subentries_at_setup = {
+            subentry_id: (
+                title,
+                {k: v for k, v in data.items() if k != CONF_CONSENT_CODE},
+            )
+            for subentry_id, (title, data) in self.subentries_at_setup.items()
+        }
 
     @callback
     def _async_pending_deletions_changed(self) -> None:
