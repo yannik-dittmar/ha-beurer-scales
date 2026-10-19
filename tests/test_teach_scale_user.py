@@ -18,6 +18,7 @@ from .test_create_scale_user import (
     after_progress,
     start_create,
     step_off_and_on,
+    teaching_reading,
     submit_and_wake,
 )
 from .test_sync import state
@@ -39,16 +40,9 @@ def short_teaching_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
 async def start_teaching(
     hass: HomeAssistant, entry: MockConfigEntry, scale: FakeScale
 ) -> dict[str, Any]:
-    """Create a scale user up to the first teaching reading."""
+    """Create a scale user up to the reading."""
     result = await start_create(hass, entry)
     return await submit_and_wake(hass, result["flow_id"], scale, CREATE_INPUT)
-
-
-async def choose(hass: HomeAssistant, flow_id: str, option: str) -> dict[str, Any]:
-    """Pick an option of the menu after a teaching reading."""
-    return await hass.config_entries.subentries.async_configure(
-        flow_id, {"next_step_id": option}
-    )
 
 
 async def until_disconnected(scale: FakeScale) -> None:
@@ -59,66 +53,37 @@ async def until_disconnected(scale: FakeScale) -> None:
         await asyncio.sleep(0.001)
 
 
-async def test_teaching_counts_up_to_three_readings(
+async def test_one_step_on_creates_the_scale_user_and_shows_the_progress(
     hass: HomeAssistant, loaded_scale: MockConfigEntry, fake_scale: FakeScale
 ) -> None:
-    """Each live reading advances "reading k of 3"; the third one finishes."""
-    result = await start_teaching(hass, loaded_scale, fake_scale)
-    flow_id = result["flow_id"]
+    """One wake, one reading, one entry; each stage is shown on the way."""
+    seen: list[str] = []
+    result = await start_create(hass, loaded_scale)
+    result = await submit_and_wake(
+        hass, result["flow_id"], fake_scale, CREATE_INPUT, seen
+    )
+    assert seen == ["create_user", "create_measure"]
+    assert result["type"] is FlowResultType.SHOW_PROGRESS
+    assert result["progress_action"] == "create_measure"
+    assert fake_scale.connected
 
-    for reading in ("1", "2"):
-        assert result["type"] is FlowResultType.SHOW_PROGRESS
-        assert result["progress_action"] == "teach"
-        assert result["description_placeholders"] == {
-            "reading": reading,
-            "readings": "3",
-        }
-        assert fake_scale.connected
-
-        result = await step_off_and_on(hass, flow_id, fake_scale, SLOT)
-
-        assert result["type"] is FlowResultType.MENU
-        assert result["step_id"] == "teach_more"
-        assert result["menu_options"] == ["teach", "teach_done"]
-        assert result["description_placeholders"] == {
-            "reading": reading,
-            "readings": "3",
-        }
-        result = await choose(hass, flow_id, "teach")
-
-    assert result["description_placeholders"] == {"reading": "3", "readings": "3"}
-    result = await step_off_and_on(hass, flow_id, fake_scale, SLOT)
+    result = await step_off_and_on(hass, result["flow_id"], fake_scale, SLOT)
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result.get("description") is None
-    assert only_subentry(loaded_scale).unique_id == f"slot_{SLOT}"
-    assert list(fake_scale.users) == [SLOT]
-    assert not fake_scale.connected
-
-
-async def test_teaching_can_finish_after_one_reading(
-    hass: HomeAssistant, loaded_scale: MockConfigEntry, fake_scale: FakeScale
-) -> None:
-    """The new household member may stop after a single reading."""
-    result = await start_teaching(hass, loaded_scale, fake_scale)
-    await step_off_and_on(hass, result["flow_id"], fake_scale, SLOT)
-
-    result = await choose(hass, result["flow_id"], "teach_done")
-
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["description"] == "measured"
+    assert result["description_placeholders"] == {"weight": "78.4 kg"}
     assert only_subentry(loaded_scale).unique_id == f"slot_{SLOT}"
     assert list(fake_scale.users) == [SLOT]
     assert fake_scale.deleted_while_connected == []
     assert not fake_scale.connected
 
 
-async def test_teaching_readings_reach_the_new_scale_users_sensors(
+async def test_the_reading_reaches_the_new_scale_users_sensors(
     hass: HomeAssistant, loaded_scale: MockConfigEntry, fake_scale: FakeScale
 ) -> None:
-    """A teaching reading is a fresh reading of the new scale user."""
+    """The teaching reading is a fresh reading of the new scale user."""
     result = await start_teaching(hass, loaded_scale, fake_scale)
     await step_off_and_on(hass, result["flow_id"], fake_scale, SLOT)
-    await choose(hass, result["flow_id"], "teach_done")
     await hass.async_block_till_done()
 
     assert state(hass, WEIGHT).state == "78.4"
@@ -132,7 +97,7 @@ async def test_teaching_without_a_reading_times_out_and_deletes_the_scale_user(
     """Nobody steps on again: the scale user is removed and the flow says why."""
     result = await start_teaching(hass, loaded_scale, fake_scale)
 
-    result = await after_progress(hass, result["flow_id"], "teach")
+    result = await after_progress(hass, result["flow_id"], "create_measure")
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "teaching_timeout"
@@ -142,31 +107,12 @@ async def test_teaching_without_a_reading_times_out_and_deletes_the_scale_user(
     assert not fake_scale.connected
 
 
-@pytest.mark.usefixtures("short_teaching_timeout")
-async def test_a_timeout_after_one_reading_keeps_the_scale_user(
+async def test_closing_the_flow_after_the_reading_keeps_the_scale_user(
     hass: HomeAssistant, loaded_scale: MockConfigEntry, fake_scale: FakeScale
 ) -> None:
-    """One reading taught the scale enough; the flow ends and says so."""
+    """The scale user got its reading: closing the flow doesn't undo it."""
     result = await start_teaching(hass, loaded_scale, fake_scale)
-    await step_off_and_on(hass, result["flow_id"], fake_scale, SLOT)
-    await choose(hass, result["flow_id"], "teach")
-
-    result = await after_progress(hass, result["flow_id"], "teach")
-
-    assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["description"] == "teaching_timeout"
-    assert only_subentry(loaded_scale).unique_id == f"slot_{SLOT}"
-    assert list(fake_scale.users) == [SLOT]
-    assert not fake_scale.connected
-
-
-@pytest.mark.usefixtures("short_teaching_timeout")
-async def test_a_timeout_while_the_menu_is_open_keeps_the_scale_user(
-    hass: HomeAssistant, loaded_scale: MockConfigEntry, fake_scale: FakeScale
-) -> None:
-    """Teaching ends while nobody answers the menu; closing it then keeps the user."""
-    result = await start_teaching(hass, loaded_scale, fake_scale)
-    await step_off_and_on(hass, result["flow_id"], fake_scale, SLOT)
+    fake_scale.weigh_in(SLOT, teaching_reading())
     await until_disconnected(fake_scale)
     assert not fake_scale.connected
 
@@ -181,9 +127,8 @@ async def test_a_timeout_while_the_menu_is_open_keeps_the_scale_user(
 async def test_aborting_during_teaching_deletes_the_scale_user(
     hass: HomeAssistant, loaded_scale: MockConfigEntry, fake_scale: FakeScale
 ) -> None:
-    """Closing the flow while teaching removes the new scale user from the scale."""
+    """Closing the flow before the reading removes the new scale user again."""
     result = await start_teaching(hass, loaded_scale, fake_scale)
-    await step_off_and_on(hass, result["flow_id"], fake_scale, SLOT)
 
     hass.config_entries.subentries.async_abort(result["flow_id"])
     await until_disconnected(fake_scale)
@@ -194,25 +139,7 @@ async def test_aborting_during_teaching_deletes_the_scale_user(
     assert not fake_scale.connected
 
 
-async def test_a_lost_link_after_one_reading_keeps_the_scale_user(
-    hass: HomeAssistant, loaded_scale: MockConfigEntry, fake_scale: FakeScale
-) -> None:
-    """The link breaks while waiting for the second reading: teaching ends at
-    once with what it has, instead of waiting on a dead connection (#17)."""
-    result = await start_teaching(hass, loaded_scale, fake_scale)
-    await step_off_and_on(hass, result["flow_id"], fake_scale, SLOT)
-    await choose(hass, result["flow_id"], "teach")
-
-    fake_scale.drop_link()
-    result = await after_progress(hass, result["flow_id"], "teach")
-
-    assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["description"] == "teaching_connection_lost"
-    assert only_subentry(loaded_scale).unique_id == f"slot_{SLOT}"
-    assert list(fake_scale.users) == [SLOT]
-
-
-async def test_a_lost_link_before_the_first_reading_deletes_at_the_next_wake(
+async def test_a_lost_link_before_the_reading_deletes_at_the_next_wake(
     hass: HomeAssistant, loaded_scale: MockConfigEntry, fake_scale: FakeScale
 ) -> None:
     """Without a reading the scale user isn't wanted, but it can't be deleted
@@ -221,7 +148,7 @@ async def test_a_lost_link_before_the_first_reading_deletes_at_the_next_wake(
     consent_code = fake_scale.users[SLOT].consent_code
 
     fake_scale.drop_link()
-    result = await after_progress(hass, result["flow_id"], "teach")
+    result = await after_progress(hass, result["flow_id"], "create_measure")
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "teaching_connection_lost"

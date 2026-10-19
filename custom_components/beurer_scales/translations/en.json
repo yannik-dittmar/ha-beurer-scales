@@ -58,14 +58,6 @@
             "height_cm": "In centimetres, from 100 to 220."
           }
         },
-        "teach_more": {
-          "title": "Teach the scale",
-          "description": "Reading {reading} of {readings} taken. Each reading teaches the scale the new scale user's weight, so it recognises them afterwards. Step off and on again for another reading, or finish now.",
-          "menu_options": {
-            "teach": "Take another reading",
-            "teach_done": "Finish"
-          }
-        },
         "adopt": {
           "title": "Adopt existing slot",
           "description": "Use a slot whose consent code you know, for example one Home Assistant created before a reinstall. Don't adopt a scale user that the Beurer app also uses: Home Assistant must be its only client.",
@@ -112,18 +104,18 @@
         },
         "repair_create": {
           "title": "Create the scale user again",
-          "description": "Home Assistant creates {name} on the scale again, with the stored profile and a new consent code. The scale may put the scale user into a different slot; its sensors stay the same. Afterwards, {name} steps off and on the scale a few times so it learns to recognise them."
+          "description": "Home Assistant creates {name} on the scale again, with the stored profile and a new consent code. The scale may put the scale user into a different slot; its sensors stay the same. {name} then steps on the scale once and stays on until its display goes dark; that reading teaches the scale who they are."
         }
       },
       "progress": {
         "wake": "Step on the scale to wake it. Home Assistant then connects, checks the consent code and reads the profile from the scale.",
-        "create": "Step on the scale to wake it. Home Assistant then connects, creates the scale user on the scale and writes its profile.",
-        "teach": "Now the new scale user steps off the scale and on again: reading {reading} of {readings}. Stand still until the scale shows the result.",
+        "create_wake": "Step 1 of 3, connecting: the new scale user steps on the scale now and stays on until the display goes dark. That one step-on wakes the scale and teaches it who they are. Don't step off early.",
+        "create_user": "Step 2 of 3, creating the scale user: Home Assistant is creating the scale user on the scale and writing its profile. Keep standing on the scale.",
+        "create_measure": "Step 3 of 3, measuring: the scale is measuring. Stay on until it has shown all results and the display goes dark (the Bluetooth icon may stay lit). Wait for that before anyone steps on the scale again.",
         "reconfigure": "Step on the scale to wake it. Home Assistant then connects and writes the new profile to the scale."
       },
       "create_entry": {
-        "teaching_timeout": "Teaching ended because the scale got no further reading in time. The scale user was created with the readings taken so far.",
-        "teaching_connection_lost": "Teaching ended because the connection to the scale was lost. The scale user was created with the readings taken so far. If the scale doesn't recognise them yet, move the Bluetooth proxy closer to the scale."
+        "measured": "The scale measured {weight}, and the scale user is set up. Wait until the display has gone dark before the next person steps on the scale."
       },
       "error": {
         "name_required": "Choose a person or enter a name.",
@@ -138,11 +130,12 @@
         "wake_timeout": "The scale didn't wake up within 3 minutes. Start again and step on the scale.",
         "pairing_unsupported": "The Bluetooth adapter or proxy that reached the scale can't pair with it. Use an ESPHome Bluetooth proxy, or make the host adapter pairable.",
         "cannot_connect": "Home Assistant couldn't talk to the scale. Make sure it is in range, then try again.",
-        "teaching_timeout": "Nobody stepped on the scale for the first teaching reading. The new scale user was removed from the scale again; start again to create it.",
-        "teaching_connection_lost": "The connection to the scale was lost before the first teaching reading. Home Assistant removes the new scale user from the scale at its next wake. Move the Bluetooth proxy closer to the scale, then start again.",
+        "teaching_timeout": "The scale delivered no reading in time. The new scale user was removed from the scale again; start again to create it.",
+        "teaching_connection_lost": "The connection to the scale was lost before its reading. Home Assistant removes the new scale user from the scale at its next wake. Move the Bluetooth proxy closer to the scale, then start again.",
         "consent_rejected": "The scale rejected this scale user's consent code, so the profile couldn't be written. Nothing was changed.",
         "reconfigure_successful": "The scale user was updated.",
         "scale_user_repaired": "The scale user works again.",
+        "scale_user_recreated": "The scale measured {weight}, and the scale user works again. Wait until the display has gone dark before the next person steps on the scale.",
         "slot_now_empty": "The scale no longer has a scale user in this slot. Open the repair again and choose to create the scale user again.",
         "profile_unknown": "Home Assistant doesn't know this scale user's full profile, so it can't create it again. Remove the scale user and add it anew.",
         "slot_held_by_other_scale_user": "The scale put the new scale user into a slot that another scale user of this scale still holds in Home Assistant, so Home Assistant removed it again. Repair or remove that scale user first."

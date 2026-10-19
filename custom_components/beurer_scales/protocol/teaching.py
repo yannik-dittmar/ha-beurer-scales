@@ -1,91 +1,46 @@
-"""Teaching: taking live readings so the scale learns a scale user's weight.
+"""Teaching: taking the one live reading that makes the scale learn a scale user.
 
 Right after it is created, the scale doesn't recognise a scale user yet. While
-that scale user is consented, every weigh-in arrives as a live reading and the
-scale learns their weight from it (CONTEXT.md, design §4.1 step 4).
+that scale user is consented, a weigh-in arrives as a live reading and the scale
+learns their weight from it. One reading is enough (ADR 0010, CONTEXT.md,
+design §4.1 step 4).
 """
 
 import asyncio
 
-from .errors import ConnectionLost, TeachingTimeout
+from .errors import TeachingTimeout
 from .readings import Reading
 from .session import ScaleSession
 
-# How many readings teaching asks for; one is enough to finish.
-TEACHING_READINGS = 3
-# How long teaching waits for each reading: stepping off, back on and standing
-# still until the reading is final (~14 s) takes a while.
+# How long teaching waits for the reading. The person stands on the scale from
+# the step-on that woke it, so the reading is final within about 14 s of that;
+# connecting and creating the scale user come first.
 TEACHING_TIMEOUT = 90.0
 
 
 class Teaching:
     """Teaching one consented scale user, observable while it runs."""
 
-    def __init__(self, readings_wanted: int = TEACHING_READINGS) -> None:
-        """Prepare to take up to `readings_wanted` readings."""
-        self.readings_wanted = readings_wanted
-        self._readings: list[Reading] = []
-        self._changed = asyncio.Event()
-        self._finish = asyncio.Event()
-        self.timed_out = False
-        self.connection_lost = False
-        self.ended = False
+    def __init__(self) -> None:
+        """Prepare to take one reading."""
+        self.reading: Reading | None = None
 
     @property
     def readings(self) -> list[Reading]:
-        """The readings taken so far, oldest first."""
-        return list(self._readings)
-
-    def finish(self) -> None:
-        """Stop teaching before all readings were taken."""
-        self._finish.set()
-
-    async def wait_for_readings(self, count: int) -> None:
-        """Return once `count` readings were taken or teaching ended."""
-        while len(self._readings) < count and not self.ended:
-            self._changed.clear()
-            await self._changed.wait()
+        """The readings taken: none, or the one teaching reading."""
+        return [] if self.reading is None else [self.reading]
 
     async def run(self, session: ScaleSession, *, timeout: float | None = None) -> None:
-        """Take live readings until enough were taken, `finish` or a timeout.
+        """Take the live reading of the consented scale user.
 
         The session must be subscribed to readings and consented as the scale user.
-        `timeout` applies to each reading. A timeout after at least one reading
-        just ends teaching (`timed_out`); before the first one it raises
-        TeachingTimeout. A broken link likewise ends teaching
-        (`connection_lost`), or raises ConnectionLost before the first reading.
+        Raises TeachingTimeout if no reading is final within `timeout`, and
+        ConnectionLost if the link breaks first.
         """
         if timeout is None:
             timeout = TEACHING_TIMEOUT
         try:
-            while len(self._readings) < self.readings_wanted:
-                reading = asyncio.ensure_future(session.wait_for_live_reading())
-                finish = asyncio.ensure_future(self._finish.wait())
-                try:
-                    done, _ = await asyncio.wait(
-                        {reading, finish},
-                        timeout=timeout,
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                finally:
-                    reading.cancel()
-                    finish.cancel()
-                if reading in done:
-                    try:
-                        self._readings.append(reading.result())
-                    except ConnectionLost:
-                        if not self._readings:
-                            raise
-                        self.connection_lost = True
-                        return
-                    self._changed.set()
-                elif finish in done:
-                    return
-                elif self._readings:
-                    self.timed_out = True
-                    return
-                else:
-                    raise TeachingTimeout("no reading while teaching")
-        finally:
-            self.ended = True
-            self._changed.set()
+            async with asyncio.timeout(timeout):
+                self.reading = await session.wait_for_live_reading()
+        except TimeoutError as err:
+            raise TeachingTimeout("no reading while teaching") from err

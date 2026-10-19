@@ -49,7 +49,7 @@ The form shared by both paths:
 1. Form as above.
 2. Progress step "Step on the scale to wake it". It waits for the wake through the per-advert callback, with its own timeout (~3 min), because the flow framework has none.
 3. Connect and bond. Read the user list and abort if there is no free slot. Register the scale user with a random consent code (1111–9998). Consent and write the profile.
-4. **Teaching**, in the same connection. A progress step says "Step off and on again: reading k of 3". Each live reading counts (2A9D → … → FFF4 `01`). The user can finish after 1 reading, and the step has its own timeout. After each reading a menu offers another reading or finishing (a progress step can't have buttons); the per-reading timeout keeps running while it is open. A timeout before the first reading deletes the scale user; after one, it keeps the scale user and the flow says teaching ended early. A broken link ends teaching the same way, except that before the first reading the scale user can't be deleted without a link: the deletion is queued like a removed scale user's (§4.3) and runs at the next wake.
+4. **Teaching**, in the same connection, from one step-on (ADR 0010). The form is followed by progress steps "connecting" (the instruction: step on and stay on until the display goes dark; that step-on wakes the scale), "creating the scale user" and "measuring". The flow waits for one live reading (2A9D → … → FFF4 `01`), with a timeout. There is no reading counter and no menu. The flow ends with the measured weight (create entry description, or the abort text of the repair fix flows). A timeout before the reading deletes the scale user. A broken link does the same, except that the scale user can't be deleted without a link: the deletion is queued like a removed scale user's (§4.3) and runs at the next wake. The texts tell the user to wait for the dark display before stepping on again.
 5. Disconnect and create the subentry.
 
 **Abort or failure after step 3:** delete the scale user on the scale (UCP `03`, while still consented) before disconnecting. A half-created scale user that HA doesn't track would steal recognition from the others.
@@ -163,7 +163,7 @@ Results are in the protocol doc §9.6. Where a result breaks this design, the fo
 |---|---|---|
 | V1 | An ESP32 ESPHome proxy bonds with the BF450 before the 0.5 s no-bond drop; proxy sync latency within the 47 s window | ✅ Bonds; a one-slot sync takes ~10 s, two slots ~25 s |
 | V2 | One connection can consent two scale users in a row | ✅ |
-| V3 | The scale stays awake while HA holds the connection for teaching, and each step-off/step-on yields a live reading | ✅ |
+| V3 | The scale stays awake while HA holds the connection for teaching, and a step-on yields a live reading; one reading teaches the scale user | ✅ |
 | V4 | 0x1D18 service data and local name are visible with passive scanning | ❌ Name and UUID yes; the pending-slot list is only in the scan response (#22) |
 | V5 | Frames are unchanged when the scale display is set to lb/st | ✅ Frames stay in kg, but an lb weigh-in wasn't flagged pending (#26) |
 | V6 | Scale and proxy behaviour after a factory reset with an existing bond | ❌ The proxy's stale bond makes bonding fail; HA can't recover by itself (#23) |

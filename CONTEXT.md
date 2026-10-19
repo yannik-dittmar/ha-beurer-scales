@@ -49,7 +49,7 @@ A reading the scale assigned to a scale user with uncertainty (the display shows
 A weigh-in that matches no scale user. The scale stores nothing for it and never delivers it.
 
 **Teaching**:
-Taking readings while a scale user is connected and consented, so the scale learns that scale user's weight and recognises them afterwards.
+Taking one reading while a new scale user is connected and consented, so the scale learns that scale user's weight and recognises them afterwards. The step-on that wakes the scale for the create flow is that reading; there are no further ones (ADR 0010).
 
 ### Synchronisation
 

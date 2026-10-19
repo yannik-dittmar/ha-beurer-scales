@@ -56,7 +56,7 @@ async def test_the_coordinator_leaves_the_scale_to_a_teaching_flow(
 
     # The wake that the flow waits for also lists Anna's slot as pending.
     result = await submit_and_wake(hass, result["flow_id"], fake_scale, CREATE_INPUT)
-    assert result["step_id"] == "teach", result
+    assert result["step_id"] == "create_measure", result
     # Waiting for background tasks would wait for teaching to time out.
     async_get_advertisement_callback(hass)(
         scale_advertisement(service_data=fake_scale.service_data())
