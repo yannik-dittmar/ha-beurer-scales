@@ -1,6 +1,7 @@
 """Removing a scale user: gone from HA at once, deleted on the scale at the next wake."""
 
 import logging
+from datetime import timedelta
 from types import MappingProxyType
 
 import pytest
@@ -302,6 +303,9 @@ async def test_a_refused_second_consent_keeps_the_pending_deletion(
     assert state(hass, WEIGHT).state == "78.4"
     assert 3 in fake_scale.users
 
+    # A new wake: advertising within 5 s of HA's disconnect is the tail of the
+    # sync's session (#25).
+    freezer.tick(timedelta(seconds=10))
     await wake_scale(hass, fake_scale)
     await stay_awake(hass, freezer, fake_scale, 26)
 

@@ -21,6 +21,7 @@ from homeassistant.components.bluetooth import (
     async_register_advertisement_callback,
 )
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_call_later
 
 from .const import DOMAIN
@@ -37,6 +38,27 @@ PATH_SETTLE = 1.5
 
 
 _LOCKS = "scale_locks"
+_SESSION_ENDED = "session_ended_at"
+
+
+def session_ended_signal(address: str) -> str:
+    """The dispatcher signal sent when any HA session with this scale has ended.
+
+    The scale sleeps ~1 s after HA disconnects, whoever held the session.
+    """
+    return f"{DOMAIN}_session_ended_{address}"
+
+
+@callback
+def session_ended_at(hass: HomeAssistant, address: str) -> float | None:
+    """When the last HA session with the scale ended, in event loop time.
+
+    Kept outside the coordinator, which a flow's new scale user reloads.
+    """
+    ended: dict[str, float] = hass.data.setdefault(DOMAIN, {}).setdefault(
+        _SESSION_ENDED, {}
+    )
+    return ended.get(address)
 
 
 class WakeTimeout(Exception):
@@ -125,7 +147,16 @@ async def async_open_session(
         device = async_ble_device_from_address(hass, address, connectable=True)
     if device is None:
         raise ScaleConnectionError(f"no connectable Bluetooth path to {address}")
-    async with open_session(
-        device, model, session_timeout=session_timeout, deadline=deadline
-    ) as session:
-        yield session
+    opened = False
+    try:
+        async with open_session(
+            device, model, session_timeout=session_timeout, deadline=deadline
+        ) as session:
+            opened = True
+            yield session
+    finally:
+        if opened:
+            hass.data.setdefault(DOMAIN, {}).setdefault(_SESSION_ENDED, {})[address] = (
+                hass.loop.time()
+            )
+            async_dispatcher_send(hass, session_ended_signal(address))

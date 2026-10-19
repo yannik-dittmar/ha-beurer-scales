@@ -1,6 +1,7 @@
 """Several pending slots in one wake: the fresh weigh-in first, then the others."""
 
 import logging
+from datetime import timedelta
 
 import pytest
 from freezegun.api import FrozenDateTimeFactory
@@ -104,6 +105,9 @@ async def test_a_refused_second_consent_leaves_the_rest_for_a_later_wake(
     assert pending(fake_scale) == b"\x01"
     assert not fake_scale.connected
 
+    # A new wake: advertising within 5 s of HA's disconnect is the tail of the
+    # sync's session (#25).
+    freezer.tick(timedelta(seconds=10))
     await wake_scale(hass, fake_scale)
     await stay_awake(hass, freezer, fake_scale, 30)
 

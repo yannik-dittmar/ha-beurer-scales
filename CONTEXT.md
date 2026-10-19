@@ -56,6 +56,9 @@ Taking readings while a scale user is connected and consented, so the scale lear
 **Wake window**:
 The ~47 s after a weigh-in during which the scale advertises and accepts connections.
 
+**After-disconnect advertising**:
+The scale's advertising for 0-20 s after any HA session with it ends (a sync, a check or a flow's session). It is the tail of that session, not a wake: it triggers no check, notification or deletion.
+
 **Pending slot**:
 A slot that the scale's scan response lists as having unsynced readings (the slot list). Slots in a wake's first slot list were pending before the wake; a slot appended later belongs to that wake's weigh-in, which is final at that moment.
 
