@@ -71,6 +71,6 @@
   "integration_type": "device",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/yannik-dittmar/ha-beurer-scales/issues",
-  "requirements": [],
+  "requirements": ["garminconnect==0.3.19"],
   "version": "0.1.0"
 }

@@ -62,6 +62,7 @@ from .connection import (
     async_scale_held,
 )
 from .discards import async_notify_discarded
+from .garmin_push import GarminPusher
 from .pending_deletions import PendingDeletions
 from .const import (
     CONF_CONSENT_CODE,
@@ -252,6 +253,7 @@ class ScaleCoordinator:
         self._logged_advertisements: set[tuple[Any, ...]] = set()
         self._policy = ReadingPolicy(model=self.model)
         self._reading_log = reading_log_store(hass, entry.entry_id)
+        self.garmin = GarminPusher(hass, entry)
         self.pending_deletions = PendingDeletions(
             hass, entry.entry_id, self._async_pending_deletions_changed
         )
@@ -269,10 +271,13 @@ class ScaleCoordinator:
                 (tuple(e) for e in stored["readings"]), model=self.model
             )
         await self.pending_deletions.async_load()
+        await self.garmin.async_load()
 
     async def async_save(self) -> None:
-        """Write the de-duplication log now, e.g. when the scale unloads."""
+        """Write the de-duplication log and the Garmin queues now, e.g. when the
+        scale unloads."""
         await self._reading_log.async_save(self._reading_log_data())
+        await self.garmin.async_save()
 
     def _reading_log_data(self) -> dict[str, Any]:
         return {"readings": self._policy.log()}
@@ -296,10 +301,13 @@ class ScaleCoordinator:
             self.wakes.async_disconnected,
         )
 
+        stop_garmin = self.garmin.async_start()
+
         @callback
         def stop() -> None:
             stop_watching()
             stop_listening()
+            stop_garmin()
             self.wakes.async_stop()
 
         return stop
@@ -354,6 +362,8 @@ class ScaleCoordinator:
         if not result.fresh:
             return
         self._latest[slot] = result.fresh[-1]
+        if (subentry := self._scale_users().get(slot)) is not None:
+            self.garmin.async_enqueue(subentry.subentry_id, result.fresh, self.model)
         self._async_update_listeners()
 
     async def _async_check_user_list(

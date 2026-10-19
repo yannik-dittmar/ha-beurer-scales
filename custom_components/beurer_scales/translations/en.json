@@ -140,6 +140,56 @@
         "profile_unknown": "Home Assistant doesn't know this scale user's full profile, so it can't create it again. Remove the scale user and add it anew.",
         "slot_held_by_other_scale_user": "The scale put the new scale user into a slot that another scale user of this scale still holds in Home Assistant, so Home Assistant removed it again. Repair or remove that scale user first."
       }
+    },
+    "garmin_connect": {
+      "initiate_flow": {
+        "user": "Add Garmin Connect link"
+      },
+      "entry_type": "Garmin Connect link",
+      "step": {
+        "user": {
+          "title": "Send readings to Garmin Connect",
+          "description": "Home Assistant sends each new reading of the scale user to the Garmin Connect account you log in with: weight and the body composition values Garmin supports.\n\nHome Assistant uses the password once, to log in, and doesn't keep it. It keeps only the login tokens Garmin returns. Use the account of the person who steps on the scale.",
+          "data": {
+            "scale_user": "Scale user",
+            "email": "Garmin email",
+            "password": "Garmin password"
+          },
+          "data_description": {
+            "scale_user": "The scale user whose readings are sent. Each scale user has at most one link."
+          }
+        },
+        "reconfigure": {
+          "title": "Log in to Garmin Connect again",
+          "description": "Log in again to give Home Assistant new tokens, for example after Garmin rejected the old ones. Readings that couldn't be sent in the meantime are sent afterwards.",
+          "data": {
+            "email": "Garmin email",
+            "password": "Garmin password"
+          }
+        },
+        "mfa": {
+          "title": "Enter the Garmin code",
+          "description": "Garmin sent a verification code to your email address or phone.",
+          "data": {
+            "mfa_code": "Verification code"
+          }
+        }
+      },
+      "progress": {
+        "login": "Logging in to Garmin Connect. This takes up to a minute: Garmin's login is slow on purpose.",
+        "verify": "Checking the verification code with Garmin Connect."
+      },
+      "error": {
+        "invalid_auth": "Garmin rejected the email or password.",
+        "invalid_mfa": "Garmin rejected the verification code.",
+        "rate_limited": "Garmin is throttling logins. Wait a few minutes, then try again.",
+        "cannot_connect": "Home Assistant couldn't log in to Garmin Connect. Try again later.",
+        "unknown": "Logging in failed unexpectedly. The log has details."
+      },
+      "abort": {
+        "no_scale_user": "Every scale user already has a Garmin Connect link, or there is no scale user yet.",
+        "reconfigure_successful": "Logged in to Garmin Connect again."
+      }
     }
   },
   "entity": {
@@ -335,6 +385,10 @@
     "no_scan_response": {
       "title": "{name}: Home Assistant sees no pending weigh-ins",
       "description": "The last {wakes} times {name} woke up, Home Assistant never received its scan response. The scale lists its pending weigh-ins only there, so Home Assistant can't tell who stepped on and doesn't sync them.\n\nThe Bluetooth path that hears the scale scans passively. Home Assistant asks for active scanning when the scale wakes, but not every path complies:\n- ESPHome Bluetooth proxy: open the proxy's entry in Home Assistant, go to **Configure** and set **Bluetooth scanning mode** to **Active**.\n- Home Assistant's own adapter: check that it supports active scanning.\n- The proxy may be too far from the scale.\n\nThis issue goes away when a scan response arrives."
+    },
+    "garmin_auth": {
+      "title": "{name}: Garmin Connect rejected the login",
+      "description": "Garmin Connect no longer accepts the login Home Assistant keeps for {name}, for example because the password changed or the login expired. New readings are kept and nothing is lost, but nothing is sent until you log in again.\n\nOpen the integration, choose the Garmin Connect link of {name}, select **Reconfigure** and log in again. This issue goes away then."
     }
   },
   "options": {

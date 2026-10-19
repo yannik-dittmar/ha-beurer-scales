@@ -3,13 +3,16 @@
 from homeassistant.const import CONF_ADDRESS, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import issue_registry as ir
 
 from .const import (
     CONF_CONSENT_CODE,
     CONF_MODEL,
+    CONF_SCALE_USER,
     CONF_SLOT,
     DOMAIN,
     MANUFACTURER,
+    SUBENTRY_GARMIN,
     SUBENTRY_SCALE_USER,
     scale_user_id,
 )
@@ -23,6 +26,7 @@ from .repairs import (
     async_clear_orphaned_scale_user_issues,
     async_delete_obsolete_unit_issue,
 )
+from .garmin_push import ISSUE_GARMIN_AUTH, garmin_store
 from .pending_deletions import PendingDeletion, async_remove_pending_deletions
 
 PLATFORMS = [Platform.SENSOR]
@@ -81,6 +85,14 @@ async def _async_reload(hass: HomeAssistant, entry: BeurerConfigEntry) -> None:
                     slot=int(data[CONF_SLOT]), consent_code=int(data[CONF_CONSENT_CODE])
                 )
             )
+    # A scale user's Garmin link goes with it, also when a factory reset removes
+    # every scale user.
+    for subentry in list(entry.subentries.values()):
+        if (
+            subentry.subentry_type == SUBENTRY_GARMIN
+            and subentry.data[CONF_SCALE_USER] not in entry.subentries
+        ):
+            hass.config_entries.async_remove_subentry(entry, subentry.subentry_id)
     if subentries_snapshot(entry) != coordinator.subentries_at_setup:
         hass.config_entries.async_schedule_reload(entry.entry_id)
 
@@ -88,6 +100,9 @@ async def _async_reload(hass: HomeAssistant, entry: BeurerConfigEntry) -> None:
 async def async_remove_entry(hass: HomeAssistant, entry: BeurerConfigEntry) -> None:
     """Forget the scale's stored data and close its repairs when it is removed."""
     await reading_log_store(hass, entry.entry_id).async_remove()
+    await garmin_store(hass, entry.entry_id).async_remove()
+    for subentry_id in entry.subentries:
+        ir.async_delete_issue(hass, DOMAIN, f"{ISSUE_GARMIN_AUTH}_{subentry_id}")
     async_clear_orphaned_scale_user_issues(hass, entry, all_of_entry=True)
     await async_remove_pending_deletions(hass, entry.entry_id)
 
