@@ -16,6 +16,7 @@ Result of the design session on 2026-10-16. Terms are defined in [`CONTEXT.md`](
   - The manual `user` step lists Beurer scales HA has seen nearby.
   - Manifest matchers: `service_data_uuid` for both byte orders of 0x181D, plus `local_name` patterns per model family.
 - **One config subentry per scale user.** unique_id = `slot_<n>`. Subentry data: slot, consent code, profile, optional person (entity registry id).
+- **One config subentry per Garmin Connect link (optional).** type `garmin_connect`, unique_id = the scale user's subentry id. Subentry data: that id only. The tokens and the upload queue are in a private `Store`. ([ADR 0011](adr/0011-garmin-connect-link-as-a-separate-subentry.md))
 - **Devices.** Each scale user has its own device, linked to the scale device with `via_device_id`. Removing a subentry removes its device and entities.
 - **Scale options.** "Notify about unrecognised weigh-ins" (on by default).
 
@@ -151,6 +152,16 @@ The scale's display unit (lb/st) does not matter for HA: measurement frames are 
 
 Repair fix flows forward to the scale user's subentry flows via `next_flow`.
 
+### 6.1 Garmin Connect
+
+| Situation | Reaction |
+|---|---|
+| Garmin rejects the stored tokens (password changed, login expired or revoked) | Pushing pauses, readings keep queueing (100 at most per scale user). Warning repair (not fixable): reconfigure the Garmin link and log in again. Clears when that login succeeds. |
+| Garmin throttles (429) or can't be reached | Tokens and queue stay. Retry after 5 min, 30 min, 2 h, then every 6 h; a new reading doesn't cut the wait short. First failure logs a warning, later ones debug. |
+| Garmin refuses one reading (invalid value) | The reading is dropped with a warning. The others go on. |
+| HA restarts with readings queued | They are sent 60 s after setup. |
+| The Garmin link or its scale user is removed | The link's tokens and queue are forgotten at the next setup; no log-out at Garmin (revoke access in the Garmin account if needed). |
+
 ## 7. Entities
 
 **Per scale user device:**
@@ -202,3 +213,5 @@ Results are in the protocol doc §9.6. Where a result breaks this design, the fo
 - A "Teach" button on the scale user device for re-teaching later.
 - The BF700/BF710 protocol family.
 - Long-term statistics import for backlog readings (if ADR 0005 is ever revisited).
+- A diagnostic sensor per Garmin link (last upload, readings waiting).
+- Garmin Connect: the live behaviour is untested (see `docs/research/garmin-connect-upload.md`, section 8): login from the user's network, what Garmin does with an identical timestamp, which fields it shows.

@@ -26,11 +26,13 @@ from .const import (
     DEFAULT_NOTIFY_UNRECOGNISED,
     DOMAIN,
     MANUFACTURER,
+    SUBENTRY_GARMIN,
     SUBENTRY_SCALE_USER,
 )
 from .factory_reset import async_factory_reset_scale, async_forget_scale_users
 from .protocol.errors import PairingFailed, PairingUnsupported
 from .protocol.models import ScaleModel, model_by_name, model_from_advertisement
+from .garmin_flow import GarminSubentryFlow
 from .scale_user_flow import ScaleUserSubentryFlow
 
 
@@ -48,8 +50,12 @@ class BeurerScalesConfigFlow(ConfigFlow, domain=DOMAIN):
     def async_get_supported_subentry_types(
         cls, config_entry: ConfigEntry
     ) -> dict[str, type[ConfigSubentryFlow]]:
-        """Scale users are subentries of their scale (ADR 0004)."""
-        return {SUBENTRY_SCALE_USER: ScaleUserSubentryFlow}
+        """Scale users are subentries of their scale (ADR 0004), and so are
+        their Garmin Connect links (ADR 0011)."""
+        return {
+            SUBENTRY_SCALE_USER: ScaleUserSubentryFlow,
+            SUBENTRY_GARMIN: GarminSubentryFlow,
+        }
 
     @staticmethod
     @callback

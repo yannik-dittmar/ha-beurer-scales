@@ -12,6 +12,11 @@ DEFAULT_NOTIFY_UNRECOGNISED = True
 # A config subentry per scale user (ADR 0004).
 SUBENTRY_SCALE_USER = "scale_user"
 
+# A config subentry per scale user that sends its readings to Garmin Connect
+# (ADR 0011). Its data names the scale user subentry it belongs to.
+SUBENTRY_GARMIN = "garmin_connect"
+CONF_SCALE_USER = "scale_user"
+
 # Subentry flow sources of the repair fix flows (#12), with context["subentry_id"].
 SOURCE_REPAIR_ADOPT = "repair_adopt"
 SOURCE_REPAIR_CREATE = "repair_create"

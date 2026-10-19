@@ -67,6 +67,16 @@ Delete the scale user's subentry. Its device and sensors disappear from Home Ass
 
 While the deletion is waiting, the **Pending deletions** sensor on the scale's device shows how many scale users are still to be deleted (the attribute `slots` lists them) and drops to 0 once the scale confirmed it; the log then says `Deleted slot N`. If it is still not done after several wakes, Home Assistant raises a repair issue. The usual causes are that Home Assistant can't connect to the scale: Bluetooth scanning is passive, the proxy is too far away, or the proxy still holds an old bond.
 
+## Send readings to Garmin Connect
+
+Optional, per scale user. Add a **Garmin Connect link** to the scale (**Add Garmin Connect link** next to **Add scale user**), choose the scale user and log in with the Garmin account of that person. If Garmin asks for a verification code, Home Assistant asks for it too. From then on, every new reading of that scale user is also uploaded to Garmin Connect as a weigh-in: weight and, where Garmin has a field for it, body fat, body water, bone mass, muscle mass, BMI, metabolic age, visceral fat rating and the basal and active metabolic rate.
+
+- Home Assistant uses the password once to log in and **doesn't store it**. It keeps only the login tokens Garmin returns, in a private file in its storage folder. Anyone who can read your Home Assistant storage can use them until you revoke access in your Garmin account, so protect your backups like a password.
+- Readings are kept until they are sent, so a Garmin outage, a rate limit or a restart loses none. Backlog and guessed readings are not sent (see Notifications).
+- If Garmin stops accepting the login, a repair issue appears. Open the Garmin link, choose **Reconfigure** and log in again; the waiting readings are sent afterwards.
+- Garmin throttles logins by client, and its login changes every few months. If logging in fails, try again later and check the integration's updates.
+- Delete the link to stop sending. Home Assistant forgets the tokens; to revoke them at Garmin, change the password or remove the access in your Garmin account.
+
 ## Factory-reset the scale
 
 Open the scale's **Configure** menu and choose **Factory reset the scale**, for example to start over when the Beurer app created the scale users and their consent codes are unknown. **This deletes every scale user on the scale, including the ones the Beurer app or other clients use.** After you confirm, step on the scale to wake it. Home Assistant resets it, removes the Bluetooth proxy's old bond so the next connection pairs afresh, and removes its own scale users and any pending deletions. Then add a scale user again with **Add scale user**.
@@ -104,6 +114,7 @@ Problems that need your action appear under **Settings → System → Repairs**.
 | Scale user deleted on the scale | The slot is empty, for example after deleting it in the Beurer app. | Create the scale user again; remove the scale user from Home Assistant |
 | Scale factory-reset | The scale lists no scale users at all. Home Assistant renews the Bluetooth bond once by itself. | Create the scale user again; remove the scale user from Home Assistant |
 | Can't pair through this Bluetooth path | The adapter or proxy that reached the scale couldn't bond with it. | Add an ESPHome proxy or make the host adapter pairable. Clears after the next successful sync. |
+| Garmin Connect rejected the login | Garmin no longer accepts the stored login of a scale user's Garmin link. | **Reconfigure** the Garmin link and log in again. Readings wait until then. |
 | Home Assistant sees no pending weigh-ins | Three wakes in a row passed without a scan response from the scale, so Home Assistant can't tell who stepped on. | Set the proxy's Bluetooth scanning mode to Active (ESPHome entry, **Configure**). Clears when a scan response arrives. |
 
 **Create the scale user again** creates it on the scale with the stored profile and a new consent code, followed by the same one-step-on teaching. The scale may choose a different slot; the sensors and their history stay the same.
