@@ -36,7 +36,7 @@ Home Assistant discovers untested models too, and setup warns you that the model
 
 Step on the scale once. Home Assistant discovers it and offers to set it up; confirm it. You can also add it under **Settings → Devices & services → Add integration → Beurer Scales**, which lists the Beurer scales Home Assistant has seen nearby.
 
-Setting up the scale doesn't connect to it, so the scale doesn't need to be awake. The scale gets its own device with a **Battery** sensor and a **Last sync** sensor (diagnostic). Then add scale users.
+Setting up the scale doesn't connect to it, so the scale doesn't need to be awake. The scale gets its own device with a **Battery** sensor and a **Last sync** sensor and a **Pending deletions** sensor (both diagnostic). Then add scale users.
 
 ## Scale users
 
@@ -63,6 +63,8 @@ Use **Reconfigure** on the scale user. Changing only the name or the person take
 ### Remove a scale user
 
 Delete the scale user's subentry. Its device and sensors disappear from Home Assistant right away. The scale user itself is deleted from the scale at the next wake, after the weigh-in is final, which frees the slot. If the scale refuses that deletion in the connection that synced someone's weigh-in, Home Assistant tries again at a wake where nobody it manages has new readings.
+
+While the deletion is waiting, the **Pending deletions** sensor on the scale's device shows how many scale users are still to be deleted (the attribute `slots` lists them) and drops to 0 once the scale confirmed it; the log then says `Deleted slot N`. If it is still not done after several wakes, Home Assistant raises a repair issue. The usual causes are that Home Assistant can't connect to the scale: Bluetooth scanning is passive, the proxy is too far away, or the proxy still holds an old bond.
 
 ## Factory-reset the scale
 

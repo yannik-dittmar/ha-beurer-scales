@@ -5,6 +5,7 @@ from datetime import datetime
 from homeassistant.components.sensor import (
     RestoreSensor,
     SensorDeviceClass,
+    SensorEntity,
     SensorEntityDescription,
     SensorStateClass,
 )
@@ -34,7 +35,13 @@ async def async_setup_entry(
 ) -> None:
     """Add the scale's sensors and each scale user's sensors."""
     coordinator = entry.runtime_data
-    async_add_entities([BatterySensor(coordinator), LastSyncSensor(coordinator)])
+    async_add_entities(
+        [
+            BatterySensor(coordinator),
+            LastSyncSensor(coordinator),
+            PendingDeletionsSensor(coordinator),
+        ]
+    )
     for subentry in entry.subentries.values():
         if subentry.subentry_type != SUBENTRY_SCALE_USER:
             continue
@@ -108,6 +115,38 @@ class LastSyncSensor(_ScaleSensor):
         if self.coordinator.last_sync is not None:
             self._attr_native_value = self.coordinator.last_sync
             self.async_write_ha_state()
+
+
+class PendingDeletionsSensor(SensorEntity):
+    """How many removed scale users still wait to be deleted on the scale (§4.3)."""
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_translation_key = "pending_deletions"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: ScaleCoordinator) -> None:
+        """Create the pending deletions sensor."""
+        self.coordinator = coordinator
+        self._attr_unique_id = f"{coordinator.address}_pending_deletions"
+        self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, coordinator.address)})
+
+    @property
+    def native_value(self) -> int:
+        """The number of pending deletions."""
+        return len(self.coordinator.pending_deletions.slots)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, list[int]]:
+        """The slots to delete."""
+        return {"slots": self.coordinator.pending_deletions.slots}
+
+    async def async_added_to_hass(self) -> None:
+        """Follow the coordinator."""
+        self.async_on_remove(
+            self.coordinator.async_add_listener(self.async_write_ha_state)
+        )
 
 
 class _ScaleUserSensor(_ScaleSensor):

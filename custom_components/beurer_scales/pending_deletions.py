@@ -5,6 +5,7 @@ user on the scale needs a wake. Until then, the slot and consent code are kept
 in a `Store`, so the deletion survives a restart.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, TypedDict
 
@@ -40,9 +41,18 @@ def _store(hass: HomeAssistant, entry_id: str) -> Store[_StoredData]:
 class PendingDeletions:
     """The pending deletions of one scale."""
 
-    def __init__(self, hass: HomeAssistant, entry_id: str) -> None:
-        """Use the scale entry's store; call `async_load` before reading."""
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry_id: str,
+        on_change: Callable[[], None] | None = None,
+    ) -> None:
+        """Use the scale entry's store; call `async_load` before reading.
+
+        `on_change` is called after a deletion is added or forgotten.
+        """
         self._store = _store(hass, entry_id)
+        self._on_change = on_change
         self._deletions: list[PendingDeletion] = []
 
     async def async_load(self) -> None:
@@ -57,6 +67,11 @@ class PendingDeletions:
         """Whether anything is waiting to be deleted."""
         return bool(self._deletions)
 
+    @property
+    def slots(self) -> list[int]:
+        """The slots waiting to be deleted, oldest first."""
+        return [d.slot for d in self._deletions]
+
     def all(self) -> list[PendingDeletion]:
         """Every pending deletion, oldest first."""
         return list(self._deletions)
@@ -67,12 +82,18 @@ class PendingDeletions:
         self._deletions = [d for d in self._deletions if d.slot != deletion.slot]
         self._deletions.append(deletion)
         await self._async_save()
+        self._changed()
 
     async def async_discard(self, deletion: PendingDeletion) -> None:
         """Forget a deletion: done, or impossible."""
         if deletion in self._deletions:
             self._deletions.remove(deletion)
             await self._async_save()
+            self._changed()
+
+    def _changed(self) -> None:
+        if self._on_change is not None:
+            self._on_change()
 
     async def _async_save(self) -> None:
         await self._store.async_save(

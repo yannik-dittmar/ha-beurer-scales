@@ -28,6 +28,7 @@ from .const import (
 
 ISSUE_PAIRING_IMPOSSIBLE = "pairing_impossible"
 ISSUE_UNSUPPORTED_UNIT = "unsupported_unit"
+ISSUE_DELETION_FAILING = "deletion_failing"
 
 
 def _issue_id(kind: str, entry: ConfigEntry) -> str:
@@ -81,6 +82,36 @@ def async_create_unit_issue(hass: HomeAssistant, entry: ConfigEntry, unit: str) 
 def async_delete_unit_issue(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """The scale reports kg again."""
     ir.async_delete_issue(hass, DOMAIN, _issue_id("unit", entry))
+
+
+@callback
+def async_create_deletion_issue(
+    hass: HomeAssistant, entry: ConfigEntry, slots: list[int], wakes: int
+) -> None:
+    """Removed scale users could not be deleted on the scale for several wakes.
+
+    Advisory only: the likely causes are in the Bluetooth path (#22, #23), and
+    the issue clears when the deletions have run.
+    """
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        _issue_id("deletion_failing", entry),
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key=ISSUE_DELETION_FAILING,
+        translation_placeholders={
+            "name": entry.title,
+            "slots": ", ".join(str(slot) for slot in slots),
+            "wakes": str(wakes),
+        },
+    )
+
+
+@callback
+def async_delete_deletion_issue(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """The pending deletions have run, or none is left."""
+    ir.async_delete_issue(hass, DOMAIN, _issue_id("deletion_failing", entry))
 
 
 # --- Scale user issues: wrong code, deleted, factory reset (#12) ---

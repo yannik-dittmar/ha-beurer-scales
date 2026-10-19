@@ -71,6 +71,8 @@ A name-only change does not need the scale.
 
 HA removes the subentry immediately. The integration remembers `(slot, consent code)` in `Store` as a pending deletion. At the next wake of any kind, after the weigh-in is final (same timing rule as §5.3), it connects, consents and deletes the scale user. If consent fails as the first consent of the connection, the code is wrong and the request is dropped. If it fails as a later consent (after a sync, or after another deletion), the scale may only allow one consent per connection *(V2, §8)*: the request is kept and waits for a wake where it can be the connection's first consent, i.e. one without a managed slot pending.
 
+While deletions wait, the **Pending deletions** diagnostic sensor of the scale device shows their count and slots, and drops to 0 after the deletion, which is logged at info level. The coordinator counts the wakes that began with a deletion pending (in memory; a restart resets it). When three wakes passed without the deletion, the next wake raises the `deletion_failing` repair issue; it clears once nothing is pending.
+
 ### 4.4 Factory reset
 
 A step in the scale's configure menu (options flow), not an entity: **Factory reset the scale**. It exists for models with a known reset characteristic (`ScaleModel.factory_reset_uuid`, BF450: FFF7).
@@ -138,6 +140,7 @@ At ~25 s into a wake the weigh-in is final (the scale appends its slot 4–10 s 
 | Factory reset | user list empty | Same repair, plus one automatic `unpair()` → `pair()` (the scale lost its bond keys) |
 | Stale bond on the path (the scale was factory-reset) | a pairing error in any connect attempt, not only the final message | Remove the path's bond (ESPHome `bluetooth_device_unpair`, no connection needed) and connect again once; if that fails too, the pairing repair below |
 | Pairing impossible on this path | pair error / `NotImplementedError` | Repair: add an ESPHome proxy or make the host adapter pairable; the text mentions a stale bond after a factory reset |
+| Removed scale user not deleted for several wakes (#29) | a wake starts with the deletion still pending, three wakes in a row | Warning repair (not fixable): likely causes are passive scanning, a weak proxy or a stale bond (#22, #23). Clears when the deletions have run |
 | Scale reports a unit other than kg | settings / frames | Warning. v1 never writes scale settings. |
 
 Repair fix flows forward to the scale user's subentry flows via `next_flow`.
@@ -169,6 +172,7 @@ Repair fix flows forward to the scale user's subentry flows via `next_flow`.
 **Scale device:**
 - Battery (%), read at every sync.
 - Last sync (timestamp, diagnostic).
+- Pending deletions (count, diagnostic; attribute `slots`): removed scale users not yet deleted on the scale (§4.3).
 
 ## 8. Hardware verification (done 2026-10-19, #17)
 
