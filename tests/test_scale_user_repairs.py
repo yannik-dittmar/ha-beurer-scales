@@ -78,16 +78,17 @@ async def test_rejected_code_for_a_listed_slot_raises_a_wrong_code_repair(
 
 
 async def wake_with_pending(hass: HomeAssistant, scale: FakeScale, *slots: int) -> None:
-    """Wake the scale with an advertisement that lists `slots` as pending.
+    """Wake the scale; a later advertisement appends `slots` as pending.
 
     The scale only lists slots that hold readings, so this stands in for an
     advertisement that raced a deletion or a reset.
     """
     scale.wake()
-    await inject_advertisement(
-        hass,
-        scale_advertisement(service_data={SWAPPED_WEIGHT_SCALE_UUID: bytes(slots)}),
-    )
+    for listed in (b"", bytes(slots)):
+        await inject_advertisement(
+            hass,
+            scale_advertisement(service_data={SWAPPED_WEIGHT_SCALE_UUID: listed}),
+        )
 
 
 async def test_slot_missing_from_the_list_raises_a_deleted_repair(

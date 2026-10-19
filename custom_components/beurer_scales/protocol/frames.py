@@ -137,6 +137,28 @@ def decode_pending_slots(payload: bytes) -> tuple[int, ...]:
     return tuple(payload)
 
 
+# AD type "Service Data - 16-bit UUID", and the UUIDs the pending-slot list
+# comes under, little-endian: 0x1D18 (BF450, byte-swapped) and 0x181D.
+_SERVICE_DATA_16 = 0x16
+_SLOT_LIST_UUIDS = (b"\x18\x1d", b"\x1d\x18")
+
+
+def decode_slot_list_in_packet(raw: bytes) -> tuple[int, ...] | None:
+    """The pending-slot list in a raw advertising packet, or None without one.
+
+    Only the scale's scan response carries the list (protocol doc §9.6).
+    """
+    i = 0
+    while i < len(raw) and (length := raw[i]):
+        structure = raw[i + 1 : i + 1 + length]
+        if structure[:1] == bytes([_SERVICE_DATA_16]) and (
+            structure[1:3] in _SLOT_LIST_UUIDS
+        ):
+            return decode_pending_slots(structure[3:])
+        i += 1 + length
+    return None
+
+
 class WeightUnit(StrEnum):
     """The unit a weight frame reports its weight in."""
 

@@ -10,8 +10,9 @@ The fake keeps its own GATT map and frame encoders, taken from the captures in
 
 Implemented so far: waking and sleeping, the required bond, setting the time,
 the user list, consent (a second one in the same connection allowed, rejected
-or dropped), stored and live readings, the pending-slot list in the
-advertisement, the battery level, registering and deleting scale users, profile
+or dropped), stored and live readings, the advertisement and the scan response
+with the pending-slot list (a weigh-in's slot appended once final), the battery
+level, registering and deleting scale users, profile
 writes, injected write failures, a factory reset with the stale bond it
 leaves behind (renewed by unpair + pair), and a link that drops (weak signal).
 """
@@ -150,6 +151,9 @@ class FakeScale:
     pairing_fails: bool = False
     # Every write the scale received: (characteristic, data, with response).
     writes: list[tuple[str, bytes, bool | None]] = field(default_factory=list)
+    # Slots of the weigh-in in progress: they are pending, but the scale lists
+    # them only once the weigh-in is final, ~10 s after stepping on (§9.6).
+    weighing_in: list[int] = field(default_factory=list)
 
     def add_user(self, slot: int, consent_code: int, **profile: Any) -> FakeScaleUser:
         """Store a scale user in a slot."""
@@ -166,6 +170,15 @@ class FakeScale:
     def wake(self) -> None:
         """Someone stepped on the scale: it advertises and accepts connections."""
         self.awake = True
+
+    def finish_weigh_in(self) -> None:
+        """The weigh-in is final: the scale appends its slot to the list."""
+        self.weighing_in.clear()
+
+    def sleep(self) -> None:
+        """The scale falls asleep by itself; a weigh-in nobody synced stays pending."""
+        self.finish_weigh_in()
+        self.awake = False
 
     def drop_link(self) -> None:
         """The radio link breaks, e.g. at a weak signal (HCI error 8, #17)."""
@@ -187,12 +200,44 @@ class FakeScale:
         pending = [slot for slot, u in sorted(self.users.items()) if u.stored_readings]
         return {SWAPPED_WEIGHT_SCALE_UUID: bytes(pending)}
 
+    def listed_slots(self) -> bytes:
+        """The pending-slot list the scan response carries now."""
+        pending = self.service_data()[SWAPPED_WEIGHT_SCALE_UUID]
+        return bytes(slot for slot in pending if slot not in self.weighing_in)
+
+    def advertising_data(self) -> bytes:
+        """The raw advertisement: flags, the 0x1D18 UUID, the name, the address
+        and the appearance; no room for the slot list (§9.6)."""
+        name = self.local_name.encode()
+        address = bytes.fromhex(self.address.replace(":", ""))[::-1]
+        return b"".join(
+            [
+                bytes([0x02, 0x01, 0x05]),
+                bytes([0x03, 0x02, 0x18, 0x1D]),
+                bytes([len(name) + 1, 0x09]) + name,
+                bytes([0x08, 0x1B]) + address + b"\x00",
+                bytes([0x03, 0x19, 0x80, 0x0C]),
+            ]
+        )
+
+    def scan_response_data(self) -> bytes:
+        """The raw scan response as an ESPHome proxy hands it over: the
+        advertisement, manufacturer data and the 0x1D18 slot list (§9.6)."""
+        slots = self.listed_slots()
+        return b"".join(
+            [
+                self.advertising_data(),
+                bytes([0x06, 0xFF, 0x06, 0x11, 0x00, 0x01, 0x00]),
+                bytes([len(slots) + 3, 0x16, 0x18, 0x1D]) + slots,
+            ]
+        )
+
     def weigh_in(self, slot: int, reading: "FakeReading") -> None:
         """Someone the scale recognises as `slot` weighs in.
 
         While that scale user is consented the reading is pushed live, followed
         by FFF4 `01` (§9.4); otherwise the scale stores it and lists the slot as
-        pending.
+        pending once the weigh-in is final (`finish_weigh_in`).
         """
         reading = reading.for_slot(slot)
         if self.display_unit != "kg":
@@ -206,6 +251,8 @@ class FakeScale:
             self.client.notify(TAKE_MEASUREMENT, b"\x01")
         else:
             self.users[slot].stored_readings.append(reading)
+            if slot not in self.weighing_in:
+                self.weighing_in.append(slot)
 
     async def establish_connection(
         self,

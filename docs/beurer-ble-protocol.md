@@ -114,7 +114,8 @@ connect only when needed.
 byte. Examples: `` (nothing pending), `01`, `01 02`. Timeline of an offline weigh-in:
 wake → first advert sometimes has no service data at all or an empty payload → ~0.5 s
 later the existing pending list (`01`) → when the new reading is final (~14 s after
-stepping on) the slot is appended (`01 02`). Slots stay listed until that user consents
+stepping on on BlueZ, 4–10 s through a proxy, §9.6) the slot is appended (`01 02`). The
+list is only in the scan response (§9.6). Slots stay listed until that user consents
 and receives the data; readings that were already delivered are not sent again.
 
 No weight values are sent in advertisements. A connection is always needed for data.
@@ -630,7 +631,8 @@ couldn't run. Removing the bond on the proxy (ESPHome `bluetooth_device_unpair`,
 works without a connection) fixed it: the next connection bonded again.
 
 **Timing (V7).**
-- A new weigh-in's slot appeared in the scan response ~10 s after stepping on (kg mode).
+- A new weigh-in's slot appeared in the scan response ~10 s after stepping on (kg mode);
+  in two later runs after 4.1 s and 7.5 s (#24).
 - Connecting *during* a weigh-in and consenting another scale user first aborted it. The
   display showed each consented user with a sync icon (`U-2`, then `U-1`) and went dark
   after the disconnect, although the person was still standing on the scale. No reading
