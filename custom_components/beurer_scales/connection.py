@@ -12,6 +12,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
+from functools import partial
 
 from bleak.backends.device import BLEDevice
 
@@ -23,6 +24,7 @@ from homeassistant.components.bluetooth import (
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_call_later
 
+from .bond import async_remove_bond
 from .const import DOMAIN
 from .protocol.errors import ScaleConnectionError
 from .protocol.models import ScaleModel
@@ -120,12 +122,19 @@ async def async_open_session(
     that fits the wake window, for sessions that keep the scale awake (teaching).
     `deadline` (event loop time) ends the session earlier, for work that starts
     late in a wake.
+
+    A failed bond (a stale one after a factory reset) is cleared on the proxy
+    and the connect repeated once (#23).
     """
     if device is None:
         device = async_ble_device_from_address(hass, address, connectable=True)
     if device is None:
         raise ScaleConnectionError(f"no connectable Bluetooth path to {address}")
     async with open_session(
-        device, model, session_timeout=session_timeout, deadline=deadline
+        device,
+        model,
+        session_timeout=session_timeout,
+        deadline=deadline,
+        remove_bond=partial(async_remove_bond, hass, device),
     ) as session:
         yield session

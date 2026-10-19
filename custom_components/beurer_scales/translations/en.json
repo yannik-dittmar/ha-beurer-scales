@@ -136,7 +136,7 @@
       "abort": {
         "no_free_slot": "Every slot on the scale is taken. Remove a scale user first, then try again.",
         "wake_timeout": "The scale didn't wake up within 3 minutes. Start again and step on the scale.",
-        "pairing_unsupported": "The Bluetooth adapter or proxy that reached the scale can't pair with it. Use an ESPHome Bluetooth proxy, or make the host adapter pairable.",
+        "pairing_unsupported": "The Bluetooth adapter or proxy that reached the scale can't pair with it. Use an ESPHome Bluetooth proxy, or make the host adapter pairable. If the scale was factory-reset, the path may still hold its old bond: Home Assistant can remove that only on an ESPHome proxy.",
         "cannot_connect": "Home Assistant couldn't talk to the scale. Make sure it is in range, then try again.",
         "teaching_timeout": "Nobody stepped on the scale for the first teaching reading. The new scale user was removed from the scale again; start again to create it.",
         "teaching_connection_lost": "The connection to the scale was lost before the first teaching reading. Home Assistant removes the new scale user from the scale at its next wake. Move the Bluetooth proxy closer to the scale, then start again.",
@@ -272,7 +272,7 @@
   "issues": {
     "pairing_impossible": {
       "title": "{name} can't pair through this Bluetooth path",
-      "description": "Home Assistant reached the scale {name}, but the Bluetooth adapter or proxy it used couldn't pair (bond) with it. The scale only stays connected when it is paired, so readings aren't synced.\n\nTo fix it, do one of these:\n- Add an ESPHome Bluetooth proxy on an ESP32 near the scale. ESPHome proxies pair with the scale automatically.\n- If Home Assistant uses its own Bluetooth adapter, make the host adapter pairable. A local adapter on Home Assistant OS usually can't pair.\n\nThis issue goes away after the next successful sync."
+      "description": "Home Assistant reached the scale {name}, but the Bluetooth adapter or proxy it used couldn't pair (bond) with it. The scale only stays connected when it is paired, so readings aren't synced.\n\nTo fix it, do one of these:\n- Add an ESPHome Bluetooth proxy on an ESP32 near the scale. ESPHome proxies pair with the scale automatically.\n- If Home Assistant uses its own Bluetooth adapter, make the host adapter pairable. A local adapter on Home Assistant OS usually can't pair.\n\nIf the scale was factory-reset, the adapter or proxy may still hold its old bond. Home Assistant removes that bond by itself on an ESPHome proxy. On a local adapter, remove the scale in the Bluetooth settings of the host (for example `bluetoothctl remove <address>`) and step on the scale again.\n\nThis issue goes away after the next successful sync."
     },
     "unsupported_unit": {
       "title": "{name} reports weights in {unit}",

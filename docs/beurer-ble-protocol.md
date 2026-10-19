@@ -629,6 +629,11 @@ terminated the link (`ESP_GATT_CONN_TERMINATE_PEER_USER`) and slept ~3 s later. 
 integration never got a connection, so its "renew the bond after a reset" step (§4)
 couldn't run. Removing the bond on the proxy (ESPHome `bluetooth_device_unpair`, which
 works without a connection) fixed it: the next connection bonded again.
+The error text is only in the first connect attempt ("Pairing failed due to error: 97");
+bleak-retry-connector's final exception says just "Disconnected". The integration therefore
+records the error of every attempt, removes the proxy's bond through the ESPHome API and
+connects again (design §3, §6). Bleak's own `unpair()` is no way out: ESPHome's client
+requires a connection, and the scale ends an unbonded link after ~0.5 s.
 
 **Timing (V7).**
 - A new weigh-in's slot appeared in the scan response ~10 s after stepping on (kg mode);
