@@ -8,6 +8,7 @@ from custom_components.beurer_scales.protocol.frames import (
     FrameError,
     WeightUnit,
     decode_pending_slots,
+    decode_slot_list_in_packet,
     decode_weight_frame,
 )
 
@@ -22,6 +23,22 @@ from . import frames
 def test_pending_slot_list(payload: bytes, slots: tuple[int, ...]) -> None:
     """The 0x1D18 service data is one byte per pending slot (§2)."""
     assert decode_pending_slots(payload) == slots
+
+
+# Raw packets through an ESPHome proxy (§9.6; the address replaced).
+ADVERTISEMENT = bytes.fromhex("0201050302181d06094246343530081b01eeddccbbaa000319800c")
+SCAN_RESPONSE = ADVERTISEMENT + bytes.fromhex("06ff06110001000416181d02")
+EMPTY_SCAN_RESPONSE = ADVERTISEMENT + bytes.fromhex("06ff06110001000316181d")
+
+
+@pytest.mark.parametrize(
+    ("raw", "slots"),
+    [(SCAN_RESPONSE, (2,)), (EMPTY_SCAN_RESPONSE, ()), (ADVERTISEMENT, None)],
+    ids=["scan response", "empty scan response", "advertisement"],
+)
+def test_slot_list_in_a_raw_packet(raw: bytes, slots: tuple[int, ...] | None) -> None:
+    """Only the scan response carries the 0x16 service data with the slot list."""
+    assert decode_slot_list_in_packet(raw) == slots
 
 
 def test_weight_frame() -> None:

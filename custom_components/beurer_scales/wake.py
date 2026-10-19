@@ -4,7 +4,7 @@ The scale advertises only while awake: from someone stepping on it until about
 47 s later, or until about 1 s after HA disconnects. A wake starts at the first
 advertisement after the scale slept and ends when HA's connection put it back
 to sleep or when it stops advertising. Work that must wait for a point in the
-wake (a weigh-in is final ~14 s after waking; ADR 0008 checks at ~25 s) is
+wake (a weigh-in is final 4–10 s after waking; ADR 0008 checks at ~25 s) is
 scheduled relative to the wake's start and dropped if the wake ends first.
 """
 

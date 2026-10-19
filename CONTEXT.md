@@ -57,7 +57,7 @@ Taking readings while a scale user is connected and consented, so the scale lear
 The ~47 s after a weigh-in during which the scale advertises and accepts connections.
 
 **Pending slot**:
-A slot that the scale's advertisement lists as having unsynced readings.
+A slot that the scale's scan response lists as having unsynced readings (the slot list). Slots in a wake's first slot list were pending before the wake; a slot appended later belongs to that wake's weigh-in, which is final at that moment.
 
 **Sync**:
 One connection during a wake window that collects the pending readings of one or more slots.

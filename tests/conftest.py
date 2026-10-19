@@ -81,11 +81,13 @@ def scale_advertisement(
     local_name: str | None = "BF450",
     service_data: dict[str, bytes] | None = None,
     rssi: int = -60,
+    raw: bytes | None = None,
 ) -> BluetoothServiceInfoBleak:
     """Build an advertisement as a BF450 sends it after waking up.
 
     By default it carries an empty pending-slot list under the byte-swapped
-    0x181D UUID, like a BF450 with no unsynced readings.
+    0x181D UUID, like a BF450 with no unsynced readings, and no raw packet, like
+    a BlueZ adapter reports it.
     """
     if service_data is None:
         service_data = {SWAPPED_WEIGHT_SCALE_UUID: b""}
@@ -111,6 +113,33 @@ def scale_advertisement(
         connectable=True,
         time=time.monotonic(),
         tx_power=None,
+        raw=raw,
+    )
+
+
+def scan_response(scale: FakeScale) -> BluetoothServiceInfoBleak:
+    """The scale's scan response through an ESPHome proxy: the slot list now."""
+    return scale_advertisement(
+        address=scale.address,
+        local_name=scale.local_name,
+        service_data={SWAPPED_WEIGHT_SCALE_UUID: scale.listed_slots()},
+        raw=scale.scan_response_data(),
+    )
+
+
+def advertisement(
+    scale: FakeScale, merged_slots: bytes = b""
+) -> BluetoothServiceInfoBleak:
+    """The scale's advertisement through an ESPHome proxy, without a slot list.
+
+    HA merges an address's service data, so it still shows `merged_slots`, the
+    list of the last scan response, which may be from an earlier wake.
+    """
+    return scale_advertisement(
+        address=scale.address,
+        local_name=scale.local_name,
+        service_data={SWAPPED_WEIGHT_SCALE_UUID: merged_slots},
+        raw=scale.advertising_data(),
     )
 
 
@@ -145,16 +174,17 @@ async def loaded_scale(
 
 
 async def wake_scale(hass: HomeAssistant, scale: FakeScale) -> None:
-    """Step on the fake scale: it wakes up and advertises."""
+    """Step on the fake scale: it wakes up and sends scan responses.
+
+    The first lists the slots pending before the wake. A weigh-in in progress
+    is appended to a later one once final (~10 s in, protocol doc §9.6), here
+    at once.
+    """
     scale.wake()
-    await inject_advertisement(
-        hass,
-        scale_advertisement(
-            address=scale.address,
-            local_name=scale.local_name,
-            service_data=scale.service_data(),
-        ),
-    )
+    await inject_advertisement(hass, scan_response(scale))
+    if scale.weighing_in:
+        scale.finish_weigh_in()
+        await inject_advertisement(hass, scan_response(scale))
 
 
 async def stay_awake(

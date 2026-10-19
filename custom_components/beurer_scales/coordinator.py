@@ -1,12 +1,17 @@
 """The scale coordinator: watches the scale's advertisements and syncs its readings.
 
-One coordinator per config entry (scale). When an advertisement lists a managed
-slot as pending, it connects, syncs the newest one first and drains the other
-managed pending slots in the same connection (design §5). Every reading,
-whether from a sync or handed over by a flow that consented, goes through
-`async_process_readings`, the single pipeline to the scale user's entities. The
-reading policy sits in that pipeline: only fresh readings reach the entities,
-backlog and guessed readings are reported, duplicates are dropped (design §5.4).
+One coordinator per config entry (scale). When the scale appends a managed slot
+to its pending-slot list, that weigh-in is final: it connects, syncs that slot
+first and drains the other managed pending slots in the same connection (design
+§5). The first slot list of a wake shows the slots pending before it; they wait
+until the wake's weigh-in is final, since connecting during a weigh-in aborts it
+(ADR 0008).
+
+Every reading, whether from a sync or handed over by a flow that consented, goes
+through `async_process_readings`, the single pipeline to the scale user's
+entities. The reading policy sits in that pipeline: only fresh readings reach
+the entities, backlog and guessed readings are reported, duplicates are dropped
+(design §5.4).
 
 Scale users removed in HA are deleted on the scale at the next wake, once that
 wake's weigh-in is final (design §4.3): in the same connection as a sync, or
@@ -15,8 +20,9 @@ wake's weigh-in is final (design §4.3): in the same connection as a sync, or
 A wake that reaches `WEIGH_IN_FINAL_DELAY` without a managed slot pending was an
 unrecognised weigh-in: HA reads the user list, which shows a deletion or a
 factory reset the scale would never report as pending (ADR 0008, design §5.3),
-and may notify about it. The leftover sync, the deletions and this check share
-that one moment per wake, so only one of them connects.
+and may notify about it. The sync of slots pending before the wake, the
+deletions and this check share that one moment per wake, so only one of them
+connects.
 """
 
 import logging
@@ -25,7 +31,6 @@ from collections.abc import (
     Callable,
     Collection,
     Iterable,
-    Mapping,
     Sequence,
 )
 from datetime import datetime
@@ -65,7 +70,11 @@ from .protocol.errors import (
     PairingUnsupported,
     ScaleError,
 )
-from .protocol.frames import WeightUnit, decode_pending_slots
+from .protocol.frames import (
+    WeightUnit,
+    decode_pending_slots,
+    decode_slot_list_in_packet,
+)
 from .protocol.models import (
     SWAPPED_WEIGHT_SCALE_UUID,
     WEIGHT_SCALE_SERVICE_UUID,
@@ -93,13 +102,10 @@ _LOGGER = logging.getLogger(__name__)
 # After a failed sync, ignore pending slots for this long instead of reconnecting
 # at every advertisement (~4 per second) of the same wake.
 RETRY_DELAY = 15.0
-# A wake that lists only slots left pending by earlier wakes is probably a
-# weigh-in still in progress: connecting would cut it short (the scale sleeps ~1 s
-# after HA disconnects). Wait this long for its slot to be appended (ADR 0008, V7).
+# A wake that lists only slots pending before it is probably a weigh-in still in
+# progress: connecting would abort it. The scale appends its slot 4–10 s after
+# stepping on; wait this long for that (ADR 0008, V7).
 WEIGH_IN_FINAL_DELAY = 25.0
-# Slots listed this early in a wake were pending before it; a slot listed later
-# is the wake's weigh-in, final ~14 s after stepping on (protocol doc §2).
-ALREADY_PENDING_WINDOW = 5.0
 # HA's sessions end this long before the scale would fall asleep by itself, so
 # work started late in a wake (at `WEIGH_IN_FINAL_DELAY`) still disconnects
 # cleanly.
@@ -120,34 +126,42 @@ def reading_log_store(hass: HomeAssistant, entry_id: str) -> Store[dict[str, Any
 type BeurerConfigEntry = ConfigEntry[ScaleCoordinator]
 
 
-def pending_slots(service_data: Mapping[str, bytes]) -> tuple[int, ...]:
-    """The pending-slot list of an advertisement; the BF450 byte-swaps the UUID."""
+def pending_slots(info: BluetoothServiceInfoBleak) -> tuple[int, ...] | None:
+    """The pending-slot list an advertisement carries, or None if it has none.
+
+    The BF450 sends the list only in its scan response (protocol doc §9.6). HA
+    merges an address's service data, so an advertisement still shows the list
+    of an earlier scan response, even one of an earlier wake: only the raw
+    packet tells. Without one (a BlueZ adapter) the service data is taken as
+    is; the BF450 byte-swaps the UUID.
+    """
+    if info.raw is not None:
+        return decode_slot_list_in_packet(info.raw)
     for uuid in (SWAPPED_WEIGHT_SCALE_UUID, WEIGHT_SCALE_SERVICE_UUID):
-        if (payload := service_data.get(uuid)) is not None:
+        if (payload := info.service_data.get(uuid)) is not None:
             return decode_pending_slots(payload)
-    return ()
+    return None
 
 
 def sync_order(
     pending: Sequence[int],
-    leftovers: Collection[int],
+    fresh: Collection[int],
     refused: Collection[int] = (),
 ) -> list[int]:
     """The order to sync managed pending slots in: the newest weigh-in first.
 
-    `leftovers` are the slots HA already saw pending and hasn't synced yet. The
-    others just became pending. The scale appends a slot to its list when that
-    weigh-in is final (protocol doc §2), so among several of either kind the
-    last one listed is taken as the newest. `refused` are slots the scale
-    refused as a later consent of a connection: they go first, because only a
-    connection's first consent tells a wrong code apart. Unverified on hardware
-    (V2): adjust here only.
+    `fresh` are the slots the scale just appended to its list: their weigh-in
+    is final now (protocol doc §2). The others were pending before. Among
+    several of either kind the last one listed is taken as the newest.
+    `refused` are slots the scale refused as a later consent of a connection:
+    they go first, because only a connection's first consent tells a wrong code
+    apart. Unverified on hardware (V2): adjust here only.
     """
     first = [slot for slot in pending if slot in refused]
     others = [slot for slot in pending if slot not in refused]
-    fresh = [slot for slot in others if slot not in leftovers]
-    rest = [slot for slot in others if slot in leftovers]
-    return [*first, *reversed(fresh), *reversed(rest)]
+    new = [slot for slot in others if slot in fresh]
+    rest = [slot for slot in others if slot not in fresh]
+    return [*first, *reversed(new), *reversed(rest)]
 
 
 def subentries_snapshot(entry: ConfigEntry[Any]) -> dict[str, Any]:
@@ -199,18 +213,17 @@ class ScaleCoordinator:
         self._listeners: list[CALLBACK_TYPE] = []
         self._syncing = False
         self._retry_after = 0.0
-        # Managed slots seen pending and not synced yet (see `sync_order`).
-        self._leftovers: set[int] = set()
         # Slots (managed, or pending deletion) the scale refused as a later
         # consent of a connection: their next consent must be a connection's
         # first (design §8, V2).
         self._refused_later: set[int] = set()
-        # What the last advertisement listed as pending, managed or not.
+        # What this wake's last slot list showed as pending, managed or not.
         self._managed_pending: list[int] = []
         self._unmanaged_pending: list[int] = []
-        # Slots pending since before this wake, and whether the scale appended
-        # one (it recognised someone, ADR 0008).
-        self._pending_before_wake: set[int] = set()
+        # The slots this wake's slot lists showed so far (None before the
+        # first), and whether the scale appended one (it recognised someone,
+        # ADR 0008).
+        self._listed_this_wake: set[int] | None = None
         self._slot_appended_this_wake = False
         self._device: BLEDevice | None = None
         # Advertisement contents logged this wake, per path (design §8, V4).
@@ -387,11 +400,17 @@ class ScaleCoordinator:
     def _async_on_advertisement(self, info: BluetoothServiceInfoBleak) -> None:
         wake = self.wakes.async_advertisement()
         self._async_log_advertisement(info, wake.elapsed)
-        pending = pending_slots(info.service_data)
-        if wake.elapsed < ALREADY_PENDING_WINDOW:
-            self._pending_before_wake.update(pending)
-        elif any(slot not in self._pending_before_wake for slot in pending):
-            self._slot_appended_this_wake = True
+        pending = pending_slots(info)
+        appended: list[int] = []
+        if pending is not None:
+            # The first list of a wake shows the slots pending before it, even
+            # if it comes late; a slot added later is this wake's weigh-in.
+            if self._listed_this_wake is None:
+                self._listed_this_wake = set(pending)
+            else:
+                appended = [s for s in pending if s not in self._listed_this_wake]
+                self._listed_this_wake.update(appended)
+            self._slot_appended_this_wake |= bool(appended)
         if (
             self._syncing
             or self.hass.loop.time() < self._retry_after
@@ -399,19 +418,19 @@ class ScaleCoordinator:
             or async_scale_held(self.hass, self.address)
         ):
             return
+        self._device = info.device if info.connectable else None
+        if pending is None:
+            return
         managed = self._managed_slots()
         ignored = [slot for slot in pending if slot not in managed]
         if ignored and ignored != self._unmanaged_pending:
             _LOGGER.debug("Ignoring pending slots HA doesn't manage: %s", ignored)
         self._unmanaged_pending = ignored
         self._managed_pending = [slot for slot in pending if slot in managed]
-        self._device = info.device if info.connectable else None
-        if not self._managed_pending:
-            return
-        # Only leftovers listed: the weigh-in may still be in progress, so they
-        # wait for `_async_after_weigh_in`.
-        if any(slot not in self._leftovers for slot in self._managed_pending):
-            self._async_start_sync()
+        # Slots pending before the wake wait for `_async_after_weigh_in`: the
+        # weigh-in may still be in progress.
+        if any(slot in managed for slot in appended):
+            self._async_start_sync(appended)
 
     @callback
     def _async_log_advertisement(
@@ -452,15 +471,15 @@ class ScaleCoordinator:
         )
 
     @callback
-    def _async_start_sync(self) -> None:
-        """Sync the slots of the last advertisement that are still managed."""
+    def _async_start_sync(self, fresh: Collection[int] = ()) -> None:
+        """Sync the slots of the last slot list that are still managed;
+        `fresh` were just appended to it."""
         managed = self._managed_slots()
         order = sync_order(
             [s for s in self._managed_pending if s in managed],
-            self._leftovers,
+            fresh,
             self._refused_later,
         )
-        self._leftovers.update(order)
         if not order:
             return
         self._syncing = True
@@ -504,7 +523,6 @@ class ScaleCoordinator:
             self.battery_percent = result.battery_percent
             self.last_sync = dt_util.utcnow()
             self._async_update_listeners()
-            self._leftovers.discard(slot)
             self.async_process_readings(slot, result.readings, sync_start)
             await self._async_drain(session, others, sync_start)
             # The weigh-in is final once its slot is listed as pending.
@@ -576,7 +594,6 @@ class ScaleCoordinator:
                     err,
                 )
                 return
-            self._leftovers.discard(slot)
             async_clear_scale_user_issues(self.hass, subentry.subentry_id)
             self.async_process_readings(slot, readings, sync_start)
 
@@ -595,19 +612,21 @@ class ScaleCoordinator:
     @callback
     def _async_on_wake(self, wake: Wake) -> None:
         self._logged_advertisements.clear()
-        self._pending_before_wake = set()
+        self._listed_this_wake = None
         self._slot_appended_this_wake = False
-        # One moment per wake for the leftover sync, the pending deletions and
-        # the user-list check, so they share one connection.
+        self._managed_pending = []
+        # One moment per wake for the sync of slots pending before it, the
+        # pending deletions and the user-list check, so they share one
+        # connection.
         wake.async_call_at(WEIGH_IN_FINAL_DELAY, self._async_after_weigh_in)
 
     @callback
     def _async_after_weigh_in(self) -> None:
         """The wake's weigh-in is final and HA hasn't connected yet.
 
-        Leftover slots are synced now (the sync also runs the deletions);
-        otherwise nobody HA manages was recognised: read the user list and run
-        the deletions in one connection.
+        Slots pending before the wake are synced now (the sync also runs the
+        deletions); otherwise nobody HA manages was recognised: read the user
+        list and run the deletions in one connection.
         """
         _LOGGER.debug(
             "Weigh-in on %s final at %s: managed pending %s, slot appended %s, "

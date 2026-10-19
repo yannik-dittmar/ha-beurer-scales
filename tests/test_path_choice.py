@@ -13,7 +13,7 @@ from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from . import frames
-from .conftest import scale_advertisement
+from .conftest import scan_response
 from .fake_scale import FakeReading, FakeScale
 from .test_create_scale_user import CREATE_INPUT, after_progress, start_create
 from .test_sync import WEIGHT, anna, local_now, state
@@ -28,11 +28,14 @@ def path_settle(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def advertise(hass: HomeAssistant, scale: FakeScale) -> None:
-    """Step on the scale without waiting for what HA starts in response."""
+    """Step on the scale without waiting for what HA starts in response.
+
+    A weigh-in in progress is appended to the second scan response.
+    """
     scale.wake()
-    async_get_advertisement_callback(hass)(
-        scale_advertisement(service_data=scale.service_data())
-    )
+    async_get_advertisement_callback(hass)(scan_response(scale))
+    scale.finish_weigh_in()
+    async_get_advertisement_callback(hass)(scan_response(scale))
     for _ in range(10):
         await asyncio.sleep(0)
 
