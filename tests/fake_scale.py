@@ -12,8 +12,8 @@ Implemented so far: waking and sleeping, the required bond, setting the time,
 the user list, consent (a second one in the same connection allowed, rejected
 or dropped), stored and live readings, the pending-slot list in the
 advertisement, the battery level, registering and deleting scale users, profile
-writes, injected write failures, and a factory reset with the stale bond it
-leaves behind (renewed by unpair + pair).
+writes, injected write failures, a factory reset with the stale bond it
+leaves behind (renewed by unpair + pair), and a link that drops (weak signal).
 """
 
 import asyncio
@@ -167,6 +167,11 @@ class FakeScale:
         """Someone stepped on the scale: it advertises and accepts connections."""
         self.awake = True
 
+    def drop_link(self) -> None:
+        """The radio link breaks, e.g. at a weak signal (HCI error 8, #17)."""
+        assert self.client is not None
+        self.client.drop()
+
     @property
     def connected(self) -> bool:
         """Whether a client currently holds a connection."""
@@ -223,17 +228,26 @@ class FakeScale:
                 f"{name} - {device.address}: Failed to connect after 2 attempt(s): "
                 f"{_PAIRING_FAILURES[self.pairing_failure]}"
             )
-        self.client = FakeBleakClient(self, bonded=pair)
+        self.client = FakeBleakClient(
+            self, bonded=pair, disconnected_callback=kwargs.get("disconnected_callback")
+        )
         return self.client
 
 
 class FakeBleakClient:
     """The connected end of a FakeScale, shaped like a `BleakClient`."""
 
-    def __init__(self, scale: FakeScale, *, bonded: bool) -> None:
+    def __init__(
+        self,
+        scale: FakeScale,
+        *,
+        bonded: bool,
+        disconnected_callback: Callable[[Any], None] | None = None,
+    ) -> None:
         """Connect; an unbonded link is dropped by the scale (§3)."""
         self._scale = scale
         self._bonded = bonded
+        self._disconnected_callback = disconnected_callback
         self._connected = True
         self._subscriptions: dict[str, NotifyCallback] = {}
         self.consented_slot: int | None = None
@@ -308,9 +322,17 @@ class FakeBleakClient:
 
     async def disconnect(self) -> bool:
         """Close the link. The scale goes back to sleep about 1 s later."""
-        self._connected = False
         self._scale.awake = False
+        self.drop()
         return True
+
+    def drop(self) -> None:
+        """Lose the link and tell the client, as bleak does on any disconnect."""
+        if not self._connected:
+            return
+        self._connected = False
+        if self._disconnected_callback is not None:
+            asyncio.get_running_loop().call_soon(self._disconnected_callback, self)
 
     def send_reading(self, reading: "FakeReading") -> None:
         """Push a reading's frames, 2A9D first (§9.2 step 8)."""

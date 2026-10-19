@@ -9,9 +9,12 @@ scheduled relative to the wake's start and dropped if the wake ends first.
 """
 
 import asyncio
+import logging
 from collections.abc import Callable
 
 from homeassistant.core import HomeAssistant, callback
+
+_LOGGER = logging.getLogger(__name__)
 
 # Without an advertisement for this long the scale is asleep again. A BF450
 # advertises several times a second while awake.
@@ -27,6 +30,7 @@ class Wake:
         """Start a wake now."""
         self._hass = hass
         self.started = hass.loop.time()
+        self.last_advertisement = self.started
         self._timers: set[asyncio.TimerHandle] = set()
 
     @property
@@ -79,23 +83,33 @@ class WakeTracker:
         """Note an advertisement of the scale; return the wake it belongs to."""
         if self._gap_timer is not None:
             self._gap_timer.cancel()
-        self._gap_timer = self._hass.loop.call_later(WAKE_GAP, self.async_asleep)
+        self._gap_timer = self._hass.loop.call_later(
+            WAKE_GAP, self.async_asleep, "it stopped advertising"
+        )
         if self._wake is None:
+            _LOGGER.debug("The scale woke up")
             self._wake = Wake(self._hass)
             self._on_wake(self._wake)
+        self._wake.last_advertisement = self._hass.loop.time()
         return self._wake
 
     @callback
-    def async_asleep(self) -> None:
+    def async_asleep(self, reason: str = "HA disconnected") -> None:
         """The scale went to sleep, e.g. HA disconnected; end the wake."""
         if self._gap_timer is not None:
             self._gap_timer.cancel()
             self._gap_timer = None
         if self._wake is not None:
+            _LOGGER.debug(
+                "Wake ended at %.1f s (%s); last advertisement at %.1f s",
+                self._wake.elapsed,
+                reason,
+                self._wake.last_advertisement - self._wake.started,
+            )
             self._wake._async_end()
             self._wake = None
 
     @callback
     def async_stop(self) -> None:
         """Stop following wakes."""
-        self.async_asleep()
+        self.async_asleep("HA stopped watching")

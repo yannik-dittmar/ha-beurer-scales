@@ -27,6 +27,8 @@ Result of the design session on 2026-10-16. Terms are defined in [`CONTEXT.md`](
   - Shelly proxies can't connect at all.
   - A proxy without pairing support raises `NotImplementedError` on pair. Show it as its own clear error.
 - Every session sits inside the ~47 s wake window: cap the whole session with a timeout, limit connection attempts, and always disconnect in `finally`.
+- Connect no earlier than 1.5 s after the wake starts. Proxies report the first advertisements at different times, and HA picks the path from the proxies that have reported the scale. Connecting at the very first advertisement left HA a single, distant proxy whose link broke (#17).
+- A session watches the link. When it closes, every wait in the session (a response, a live reading) ends at once with `ConnectionLost` instead of running into its timeout.
 
 ## 4. Scale user lifecycle
 
@@ -47,7 +49,7 @@ The form shared by both paths:
 1. Form as above.
 2. Progress step "Step on the scale to wake it". It waits for the wake through the per-advert callback, with its own timeout (~3 min), because the flow framework has none.
 3. Connect and bond. Read the user list and abort if there is no free slot. Register the scale user with a random consent code (1111–9998). Consent and write the profile.
-4. **Teaching**, in the same connection. A progress step says "Step off and on again: reading k of 3". Each live reading counts (2A9D → … → FFF4 `01`). The user can finish after 1 reading, and the step has its own timeout. After each reading a menu offers another reading or finishing (a progress step can't have buttons); the per-reading timeout keeps running while it is open. A timeout before the first reading deletes the scale user; after one, it keeps the scale user and the flow says teaching ended early.
+4. **Teaching**, in the same connection. A progress step says "Step off and on again: reading k of 3". Each live reading counts (2A9D → … → FFF4 `01`). The user can finish after 1 reading, and the step has its own timeout. After each reading a menu offers another reading or finishing (a progress step can't have buttons); the per-reading timeout keeps running while it is open. A timeout before the first reading deletes the scale user; after one, it keeps the scale user and the flow says teaching ended early. A broken link ends teaching the same way, except that before the first reading the scale user can't be deleted without a link: the deletion is queued like a removed scale user's (§4.3) and runs at the next wake.
 5. Disconnect and create the subentry.
 
 **Abort or failure after step 3:** delete the scale user on the scale (UCP `03`, while still consented) before disconnecting. A half-created scale user that HA doesn't track would steal recognition from the others.

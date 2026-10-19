@@ -58,6 +58,12 @@ def fast_quiet_period(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+@pytest.fixture(autouse=True)
+def no_path_settle(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Connect right at the wake: the fake scale has a single path."""
+    monkeypatch.setattr("custom_components.beurer_scales.connection.PATH_SETTLE", 0)
+
+
 @pytest.fixture
 def configured_scale(hass: HomeAssistant) -> MockConfigEntry:
     """A BF450 that is already set up."""

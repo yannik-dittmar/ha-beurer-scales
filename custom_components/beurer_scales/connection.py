@@ -30,6 +30,10 @@ from .protocol.session import ScaleSession, open_session
 
 # How long a flow waits for someone to step on the scale.
 WAKE_TIMEOUT = 180
+# Proxies report a wake's first advertisements at slightly different times.
+# Connecting at the very first one leaves HA a single path to choose from,
+# which in the field was a distant proxy whose link broke (#17).
+PATH_SETTLE = 1.5
 
 
 _LOCKS = "scale_locks"
@@ -87,6 +91,17 @@ async def async_wait_for_wake(
     finally:
         cancel_advertisements()
         cancel_timer()
+    await async_let_paths_settle(hass, hass.loop.time())
+
+
+async def async_let_paths_settle(hass: HomeAssistant, woke_at: float) -> None:
+    """Wait until `PATH_SETTLE` after the wake, so every proxy in range has
+    reported the scale and HA connects through the best one.
+
+    `woke_at` is in event loop time.
+    """
+    if (delay := woke_at + PATH_SETTLE - hass.loop.time()) > 0:
+        await asyncio.sleep(delay)
 
 
 @asynccontextmanager

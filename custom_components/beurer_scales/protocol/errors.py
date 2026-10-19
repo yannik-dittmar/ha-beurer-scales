@@ -9,6 +9,10 @@ class ScaleConnectionError(ScaleError):
     """The scale couldn't be reached, or it dropped the connection."""
 
 
+class ConnectionLost(ScaleConnectionError):
+    """The link broke during the session, e.g. at a weak signal (#17)."""
+
+
 class PairingUnsupported(ScaleConnectionError):
     """The Bluetooth path (adapter or proxy) can't bond, and the scale requires it."""
 

@@ -122,7 +122,8 @@
         "reconfigure": "Step on the scale to wake it. Home Assistant then connects and writes the new profile to the scale."
       },
       "create_entry": {
-        "teaching_timeout": "Teaching ended because the scale got no further reading in time. The scale user was created with the readings taken so far."
+        "teaching_timeout": "Teaching ended because the scale got no further reading in time. The scale user was created with the readings taken so far.",
+        "teaching_connection_lost": "Teaching ended because the connection to the scale was lost. The scale user was created with the readings taken so far. If the scale doesn't recognise them yet, move the Bluetooth proxy closer to the scale."
       },
       "error": {
         "name_required": "Choose a person or enter a name.",
@@ -138,6 +139,7 @@
         "pairing_unsupported": "The Bluetooth adapter or proxy that reached the scale can't pair with it. Use an ESPHome Bluetooth proxy, or make the host adapter pairable.",
         "cannot_connect": "Home Assistant couldn't talk to the scale. Make sure it is in range, then try again.",
         "teaching_timeout": "Nobody stepped on the scale for the first teaching reading. The new scale user was removed from the scale again; start again to create it.",
+        "teaching_connection_lost": "The connection to the scale was lost before the first teaching reading. Home Assistant removes the new scale user from the scale at its next wake. Move the Bluetooth proxy closer to the scale, then start again.",
         "consent_rejected": "The scale rejected this scale user's consent code, so the profile couldn't be written. Nothing was changed.",
         "reconfigure_successful": "The scale user was updated.",
         "scale_user_repaired": "The scale user works again.",

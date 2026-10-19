@@ -50,7 +50,7 @@ Both ask for a **person** and a **name**. Both are optional, but you need at lea
 2. Step on the scale to wake it when asked. The flow waits up to 3 minutes. Home Assistant then connects and creates the scale user on the scale. It picks the consent code itself and stores it; you never need to know it.
 3. **Teaching.** While Home Assistant stays connected, the new scale user steps off the scale and on again, standing still until the result shows ("reading 1 of 3"). Each reading teaches the scale that person's weight so it recognises them later. After each reading you can take another one or finish; after the third reading the flow finishes on its own.
 
-If the scale is full, the flow stops and asks you to remove a scale user first. If you cancel the flow, or nobody steps on the scale for the first teaching reading, Home Assistant deletes the new scale user from the scale again so it doesn't confuse recognition. If teaching times out after at least one reading, the scale user is kept with the readings taken so far.
+If the scale is full, the flow stops and asks you to remove a scale user first. If you cancel the flow, or nobody steps on the scale for the first teaching reading, Home Assistant deletes the new scale user from the scale again so it doesn't confuse recognition. If teaching times out or the Bluetooth connection breaks after at least one reading, the scale user is kept with the readings taken so far. If the connection breaks before the first reading, Home Assistant deletes the new scale user at the scale's next wake. A connection that breaks usually means the proxy is too far from the scale.
 
 ### Adopt an existing slot
 
@@ -98,6 +98,21 @@ Problems that need your action appear under **Settings → System → Repairs**.
 | Scale reports weights in lb or st | The scale's display unit isn't kg. Those readings aren't recorded. | Set the scale back to kg, for example in the Beurer app. Home Assistant never changes scale settings. Clears with the next reading in kg. |
 
 **Create the scale user again** creates it on the scale with the stored profile and a new consent code, followed by teaching. The scale may choose a different slot; the sensors and their history stay the same.
+
+## Debug logs
+
+When you report a problem, attach a debug log of one weigh-in. Turn it on with the action **Logger: Set level** (no restart needed):
+
+```yaml
+action: logger.set_level
+data:
+  custom_components.beurer_scales: debug
+  bleak_retry_connector: debug
+  bleak_esphome: debug
+  habluetooth.wrappers: debug
+```
+
+The log shows the scale's advertisements, which Bluetooth path Home Assistant connected through, how long connecting and bonding took, and every frame with its time since the connection opened. Consent codes are masked. The frames do contain your readings and profile, so look through the log before you post it.
 
 ## Documentation
 
