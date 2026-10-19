@@ -242,6 +242,9 @@
       },
       "torso_muscle": {
         "name": "Torso muscle"
+      },
+      "pending_deletions": {
+        "name": "Pending deletions"
       }
     }
   },
@@ -328,6 +331,10 @@
           "scale_user_removed": "This scale user no longer exists."
         }
       }
+    },
+    "deletion_failing": {
+      "title": "{name}: removed scale users are still not deleted on the scale",
+      "description": "The scale users in slot(s) {slots} were removed in Home Assistant, but {name} still has them: Home Assistant did not manage to delete them in the last {wakes} wakes of the scale. They keep taking up slots.\n\nThe likely causes are that Home Assistant never connects to the scale, or that the connection fails:\n- Home Assistant scans passively. The scale's advertisements don't reach it in a way it can act on.\n- The Bluetooth proxy is too far from the scale, or its connection is weak.\n- The proxy or adapter holds an old bond with the scale, for example after a factory reset.\n\nCheck the **Pending deletions** sensor on the scale's device. Move the proxy closer to the scale and step on the scale again. This issue goes away when the deletions have run."
     }
   },
   "options": {
