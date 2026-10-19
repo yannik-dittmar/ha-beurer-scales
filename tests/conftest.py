@@ -156,9 +156,19 @@ async def inject_advertisement(
 def fake_scale() -> Iterator[FakeScale]:
     """A sleeping BF450 behind the Bluetooth boundary; HA connects to it."""
     scale = FakeScale(address=SCALE_ADDRESS)
-    with patch(
-        "custom_components.beurer_scales.protocol.session.establish_connection",
-        scale.establish_connection,
+    with (
+        patch(
+            "custom_components.beurer_scales.protocol.session.establish_connection",
+            scale.establish_connection,
+        ),
+        patch(
+            "custom_components.beurer_scales.connection.async_remove_bond",
+            scale.remove_proxy_bond,
+        ),
+        patch(
+            "custom_components.beurer_scales.factory_reset.async_remove_bond",
+            scale.remove_proxy_bond,
+        ),
     ):
         yield scale
 
@@ -200,3 +210,22 @@ async def stay_awake(
         await hass.async_block_till_done(wait_background_tasks=True)
         if scale.awake:
             await wake_scale(hass, scale)
+
+
+@pytest.fixture(autouse=True)
+def active_scans() -> Iterator[list[float | None]]:
+    """Record the active scans the coordinator requests instead of running them.
+
+    The real request waits for the sweep's duration; the list holds each
+    requested duration.
+    """
+    requested: list[float | None] = []
+
+    async def request(hass: HomeAssistant, duration: float | None = None) -> None:
+        requested.append(duration)
+
+    with patch(
+        "custom_components.beurer_scales.coordinator.async_request_active_scan",
+        request,
+    ):
+        yield requested

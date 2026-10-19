@@ -27,7 +27,8 @@ from .const import (
 )
 
 ISSUE_PAIRING_IMPOSSIBLE = "pairing_impossible"
-ISSUE_UNSUPPORTED_UNIT = "unsupported_unit"
+ISSUE_DELETION_FAILING = "deletion_failing"
+ISSUE_NO_SCAN_RESPONSE = "no_scan_response"
 
 
 def _issue_id(kind: str, entry: ConfigEntry) -> str:
@@ -60,27 +61,73 @@ def async_delete_pairing_issue(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 
 @callback
-def async_create_unit_issue(hass: HomeAssistant, entry: ConfigEntry, unit: str) -> None:
-    """The scale reported weights in `unit`, not kg; they were not used.
+def async_delete_obsolete_unit_issue(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Remove the "reports weights in lb or st" issue an older version raised.
 
-    Advisory only: v1 never writes scale settings, so the user sets the scale's
-    display back to kg (design §6).
+    The display unit never reaches measurement frames (design §6), so the check
+    is gone; its issue would otherwise stay until dismissed.
+    """
+    ir.async_delete_issue(hass, DOMAIN, _issue_id("unit", entry))
+
+
+@callback
+def async_create_deletion_issue(
+    hass: HomeAssistant, entry: ConfigEntry, slots: list[int], wakes: int
+) -> None:
+    """Removed scale users could not be deleted on the scale for several wakes.
+
+    Advisory only: the likely causes are in the Bluetooth path (#22, #23), and
+    the issue clears when the deletions have run.
     """
     ir.async_create_issue(
         hass,
         DOMAIN,
-        _issue_id("unit", entry),
+        _issue_id(ISSUE_DELETION_FAILING, entry),
         is_fixable=False,
         severity=ir.IssueSeverity.WARNING,
-        translation_key=ISSUE_UNSUPPORTED_UNIT,
-        translation_placeholders={"name": entry.title, "unit": unit},
+        translation_key=ISSUE_DELETION_FAILING,
+        translation_placeholders={
+            "name": entry.title,
+            "slots": ", ".join(str(slot) for slot in slots),
+            "wakes": str(wakes),
+        },
     )
 
 
 @callback
-def async_delete_unit_issue(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """The scale reports kg again."""
-    ir.async_delete_issue(hass, DOMAIN, _issue_id("unit", entry))
+def async_delete_deletion_issue(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """The pending deletions have run, or none is left."""
+    ir.async_delete_issue(hass, DOMAIN, _issue_id(ISSUE_DELETION_FAILING, entry))
+
+
+@callback
+def async_create_no_scan_response_issue(
+    hass: HomeAssistant, entry: ConfigEntry, wakes: int
+) -> None:
+    """Several wakes went by without a single scan response (#22).
+
+    The scale lists its pending slots only in its scan response, which a
+    passively scanning path never receives. Advisory only: the user sets the
+    proxy's Bluetooth scanning mode to active.
+    """
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        _issue_id(ISSUE_NO_SCAN_RESPONSE, entry),
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key=ISSUE_NO_SCAN_RESPONSE,
+        translation_placeholders={"name": entry.title, "wakes": str(wakes)},
+        learn_more_url="https://esphome.io/components/bluetooth_proxy/",
+    )
+
+
+@callback
+def async_delete_no_scan_response_issue(
+    hass: HomeAssistant, entry: ConfigEntry
+) -> None:
+    """A scan response arrived."""
+    ir.async_delete_issue(hass, DOMAIN, _issue_id(ISSUE_NO_SCAN_RESPONSE, entry))
 
 
 # --- Scale user issues: wrong code, deleted, factory reset (#12) ---

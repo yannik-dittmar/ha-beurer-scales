@@ -17,6 +17,10 @@ Scale users removed in HA are deleted on the scale at the next wake, once that
 wake's weigh-in is final (design §4.3): in the same connection as a sync, or
 `WEIGH_IN_FINAL_DELAY` after the wake started.
 
+A wake without any scan response is not an unrecognised weigh-in: nothing is known
+about its pending slots. HA requests an active scan at each wake's start; wake
+after wake without a scan response raises a repair issue (#22).
+
 A wake that reaches `WEIGH_IN_FINAL_DELAY` without a managed slot pending was an
 unrecognised weigh-in: HA reads the user list, which shows a deletion or a
 factory reset the scale would never report as pending (ADR 0008, design §5.3),
@@ -40,14 +44,18 @@ from bleak.backends.device import BLEDevice
 from homeassistant.components.bluetooth import (
     BluetoothServiceInfoBleak,
     async_register_advertisement_callback,
+    async_request_active_scan,
 )
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .connection import (
+    session_ended_at,
+    session_ended_signal,
     async_hold_scale,
     async_let_paths_settle,
     async_open_session,
@@ -71,7 +79,6 @@ from .protocol.errors import (
     ScaleError,
 )
 from .protocol.frames import (
-    WeightUnit,
     decode_pending_slots,
     decode_slot_list_in_packet,
 )
@@ -87,10 +94,12 @@ from .protocol.session import ScaleSession
 from .repairs import (
     ScaleUserIssue,
     async_clear_scale_user_issues,
+    async_create_deletion_issue,
+    async_create_no_scan_response_issue,
     async_create_pairing_issue,
-    async_create_unit_issue,
+    async_delete_deletion_issue,
+    async_delete_no_scan_response_issue,
     async_delete_pairing_issue,
-    async_delete_unit_issue,
     async_raise_scale_user_issue,
     async_scale_user_issue,
 )
@@ -106,10 +115,19 @@ RETRY_DELAY = 15.0
 # progress: connecting would abort it. The scale appends its slot 4–10 s after
 # stepping on; wait this long for that (ADR 0008, V7).
 WEIGH_IN_FINAL_DELAY = 25.0
+
+# Wakes with a deletion still pending before a repair issue is raised (#29).
+DELETION_FAILING_WAKES = 3
 # HA's sessions end this long before the scale would fall asleep by itself, so
 # work started late in a wake (at `WEIGH_IN_FINAL_DELAY`) still disconnects
 # cleanly.
 WAKE_END_MARGIN = 2.0
+
+# The active scan asked for at each wake; habluetooth caps a window at 35 s (#22).
+ACTIVE_SCAN_WINDOW = 35.0
+# Wakes in a row that reached `WEIGH_IN_FINAL_DELAY` without any scan response
+# before a repair issue names the passive scanning path (#22).
+NO_SCAN_RESPONSE_WAKES = 3
 
 _HANDOVER = "handover"
 
@@ -217,6 +235,10 @@ class ScaleCoordinator:
         # consent of a connection: their next consent must be a connection's
         # first (design §8, V2).
         self._refused_later: set[int] = set()
+        # Wakes that began with a deletion pending, since one last ran (#29).
+        self._deletion_wakes = 0
+        # Wakes in a row without a scan response, as of their weigh-in check (#22).
+        self._silent_wakes = 0
         # What this wake's last slot list showed as pending, managed or not.
         self._managed_pending: list[int] = []
         self._unmanaged_pending: list[int] = []
@@ -230,8 +252,14 @@ class ScaleCoordinator:
         self._logged_advertisements: set[tuple[Any, ...]] = set()
         self._policy = ReadingPolicy(model=self.model)
         self._reading_log = reading_log_store(hass, entry.entry_id)
-        self.pending_deletions = PendingDeletions(hass, entry.entry_id)
-        self.wakes = WakeTracker(hass, self._async_on_wake)
+        self.pending_deletions = PendingDeletions(
+            hass, entry.entry_id, self._async_pending_deletions_changed
+        )
+        self.wakes = WakeTracker(
+            hass,
+            self._async_on_wake,
+            lambda: session_ended_at(hass, self.address),
+        )
 
     async def async_load(self) -> None:
         """Restore the de-duplication log and the pending deletions; call
@@ -260,9 +288,18 @@ class ScaleCoordinator:
             self.hass, self._async_on_advertisement, self.address
         )
 
+        # Any HA session ends the wake, not only the coordinator's own: the
+        # scale sleeps ~1 s after HA disconnects.
+        stop_listening = async_dispatcher_connect(
+            self.hass,
+            session_ended_signal(self.address),
+            self.wakes.async_disconnected,
+        )
+
         @callback
         def stop() -> None:
             stop_watching()
+            stop_listening()
             self.wakes.async_stop()
 
         return stop
@@ -289,7 +326,7 @@ class ScaleCoordinator:
         `sync_start` (aware, default now) is when the sync that collected the
         readings began; readings much older than it are backlog (ADR 0005).
         """
-        readings = self._async_kg_only(r for r in readings if r.slot == slot)
+        readings = [r for r in readings if r.slot == slot]
         if not readings:
             return
         start = dt_util.as_local(sync_start or dt_util.now()).replace(tzinfo=None)
@@ -318,26 +355,6 @@ class ScaleCoordinator:
             return
         self._latest[slot] = result.fresh[-1]
         self._async_update_listeners()
-
-    @callback
-    def _async_kg_only(self, readings: Iterable[Reading]) -> list[Reading]:
-        """Drop readings in another unit than kg and warn about them.
-
-        v1 never writes scale settings, so the user switches the display back.
-        """
-        readings = list(readings)
-        kg = [r for r in readings if r.unit is WeightUnit.KG]
-        if other := [r for r in readings if r.unit is not WeightUnit.KG]:
-            _LOGGER.warning(
-                "Discarding %s reading(s) of %s in %s; only kg is supported",
-                len(other),
-                self.address,
-                other[-1].unit,
-            )
-            async_create_unit_issue(self.hass, self.entry, str(other[-1].unit))
-        elif kg:
-            async_delete_unit_issue(self.hass, self.entry)
-        return kg
 
     async def _async_check_user_list(
         self, session: ScaleSession, rejected_slot: int | None = None
@@ -411,6 +428,9 @@ class ScaleCoordinator:
                 appended = [s for s in pending if s not in self._listed_this_wake]
                 self._listed_this_wake.update(appended)
             self._slot_appended_this_wake |= bool(appended)
+            if self._silent_wakes:
+                self._silent_wakes = 0
+                async_delete_no_scan_response_issue(self.hass, self.entry)
         if (
             self._syncing
             or self.hass.loop.time() < self._retry_after
@@ -547,7 +567,6 @@ class ScaleCoordinator:
         starts. Leaves the scale alone if a flow holds it: the work waits for a
         later wake. Raises ScaleError.
         """
-        connected = False
         wake = self.wakes.current
         deadline = wake.falls_asleep_at - WAKE_END_MARGIN if wake else None
         try:
@@ -562,13 +581,10 @@ class ScaleCoordinator:
                 async with async_open_session(
                     self.hass, self.address, self.model, device, deadline=deadline
                 ) as session:
-                    connected = True
                     await work(session)
         finally:
+            # The end of the session ends the wake (see `async_start`).
             self._syncing = False
-            if connected:
-                # The scale sleeps ~1 s after HA disconnects.
-                self.wakes.async_asleep()
 
     async def _async_drain(
         self,
@@ -615,10 +631,66 @@ class ScaleCoordinator:
         self._listed_this_wake = None
         self._slot_appended_this_wake = False
         self._managed_pending = []
+        # The scale lists its pending slots only in its scan response, which a
+        # passive path never hears: ask for an active scan for the wake's rest.
+        self.entry.async_create_background_task(
+            self.hass,
+            async_request_active_scan(self.hass, ACTIVE_SCAN_WINDOW),
+            f"{DOMAIN} active scan {self.address}",
+        )
+        if wake.after_disconnect:
+            # The scale's tail of advertising after HA's own session: nothing
+            # to check (ADR 0008). A slot appended to a later scan response
+            # still syncs in `_async_on_advertisement`.
+            return
+        self._async_count_deletion_wake()
         # One moment per wake for the sync of slots pending before it, the
         # pending deletions and the user-list check, so they share one
         # connection.
         wake.async_call_at(WEIGH_IN_FINAL_DELAY, self._async_after_weigh_in)
+
+    @callback
+    def _async_count_deletion_wake(self) -> None:
+        """Count a wake that starts with a deletion still pending (#29).
+
+        The `DELETION_FAILING_WAKES`th such wake without the deletion having
+        run raises a repair issue names the likely causes.
+        """
+        if not self.pending_deletions:
+            return
+        self._deletion_wakes += 1
+        if self._deletion_wakes >= DELETION_FAILING_WAKES:
+            async_create_deletion_issue(
+                self.hass,
+                self.entry,
+                self.pending_deletions.slots,
+                self._deletion_wakes,
+            )
+
+    async def async_forget_slots(self) -> None:
+        """The scale's slots are gone (factory reset): forget what refers to them.
+
+        Drops the pending deletions and the consent codes of the setup snapshot,
+        which the update listener compares against, so removing the scale user
+        subentries afterwards queues no deletion.
+        """
+        for deletion in self.pending_deletions.all():
+            await self.pending_deletions.async_discard(deletion)
+        self.subentries_at_setup = {
+            subentry_id: (
+                title,
+                {k: v for k, v in data.items() if k != CONF_CONSENT_CODE},
+            )
+            for subentry_id, (title, data) in self.subentries_at_setup.items()
+        }
+
+    @callback
+    def _async_pending_deletions_changed(self) -> None:
+        """A deletion was added or has run: update the entities and the issue."""
+        if not self.pending_deletions:
+            self._deletion_wakes = 0
+            async_delete_deletion_issue(self.hass, self.entry)
+        self._async_update_listeners()
 
     @callback
     def _async_after_weigh_in(self) -> None:
@@ -637,13 +709,22 @@ class ScaleCoordinator:
             self._slot_appended_this_wake,
             self._syncing,
         )
+        no_scan_response = self._listed_this_wake is None
+        if no_scan_response:
+            self._async_count_silent_wake()
         if self._syncing or async_scale_held(self.hass, self.address):
             return
         if self._managed_pending:
             self._async_start_sync()
             return
-        if not self._slot_appended_this_wake and self.entry.options.get(
-            CONF_NOTIFY_UNRECOGNISED, DEFAULT_NOTIFY_UNRECOGNISED
+        # Without any scan response HA knows nothing about the pending slots,
+        # so nobody was shown to be unrecognised.
+        if (
+            not no_scan_response
+            and not self._slot_appended_this_wake
+            and self.entry.options.get(
+                CONF_NOTIFY_UNRECOGNISED, DEFAULT_NOTIFY_UNRECOGNISED
+            )
         ):
             async_notify_unrecognised(self.hass, self.address, self.entry.title)
         if not self._scale_users() and not self.pending_deletions:
@@ -654,6 +735,25 @@ class ScaleCoordinator:
             self._async_check_session(),
             f"{DOMAIN} check {self.address}",
         )
+
+    @callback
+    def _async_count_silent_wake(self) -> None:
+        """A wake reached its weigh-in check without any scan response (#22).
+
+        Active scanning was asked for at the wake's start; if wake after wake
+        still brings none, the path scans passively and a repair issue says how
+        to change that. It clears with the next scan response.
+        """
+        self._silent_wakes += 1
+        _LOGGER.debug(
+            "No scan response from %s in %s wake(s) in a row",
+            self.address,
+            self._silent_wakes,
+        )
+        if self._silent_wakes >= NO_SCAN_RESPONSE_WAKES:
+            async_create_no_scan_response_issue(
+                self.hass, self.entry, self._silent_wakes
+            )
 
     async def _async_check_session(self) -> None:
         """Check the user list and run the pending deletions in one session."""
@@ -723,7 +823,7 @@ class ScaleCoordinator:
                     err,
                 )
                 return
-            _LOGGER.debug("Deleted slot %s on %s", deletion.slot, self.address)
+            _LOGGER.info("Deleted slot %s on %s", deletion.slot, self.address)
             first = False
             self._refused_later.discard(deletion.slot)
             await self.pending_deletions.async_discard(deletion)

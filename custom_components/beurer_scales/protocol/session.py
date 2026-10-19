@@ -119,6 +119,11 @@ class GattClient(Protocol):
         ...
 
 
+# Removes the bond a Bluetooth path holds for the scale, without a connection;
+# returns whether it did.
+type RemoveBond = Callable[[], Awaitable[bool]]
+
+
 @dataclass(frozen=True, slots=True)
 class SyncResult:
     """What one sync of a scale user collected."""
@@ -135,11 +140,17 @@ async def open_session(
     session_timeout: float | None = None,
     deadline: float | None = None,
     response_timeout: float | None = None,
+    remove_bond: RemoveBond | None = None,
 ) -> AsyncIterator["ScaleSession"]:
     """Connect with bonding and yield a session; always disconnect afterwards.
 
     The session ends after `session_timeout`, or at `deadline` (event loop
     time) if that comes first, e.g. when it starts late in a wake.
+
+    When bonding fails, `remove_bond` (if given) removes the host path's bond
+    without a connection and returns whether it did; the connect is then
+    repeated once. A scale that was factory-reset has forgotten its bond keys
+    while the path still holds them, so every bonding fails until then (§9.6).
     """
     if session_timeout is None:
         session_timeout = SESSION_TIMEOUT
@@ -168,7 +179,18 @@ async def open_session(
     )
     try:
         async with asyncio.timeout_at(ends_at):
-            client = await _connect(device, on_disconnected)
+            try:
+                client = await _connect(device, on_disconnected)
+            except PairingFailed as err:
+                if remove_bond is None or not await remove_bond():
+                    raise
+                _LOGGER.info(
+                    "Bonding with %s failed (%s); removed the path's bond, "
+                    "connecting again",
+                    device.address,
+                    err,
+                )
+                client = await _connect(device, on_disconnected)
             _LOGGER.debug(
                 "Session with %s: connected and bonded after %.2f s",
                 device.address,
@@ -205,9 +227,22 @@ def _source(device: BLEDevice) -> str:
 async def _connect(
     device: BLEDevice, on_disconnected: Callable[[Any], None]
 ) -> GattClient:
+    # bleak-retry-connector retries, and raises only the last error, which for a
+    # failed bond is just "Disconnected": the scale ends the link after a bond
+    # error (§9.6, V6). Keep the error of every attempt.
+    attempt_errors: list[str] = []
+
+    class RecordingClient(BleakClientWithServiceCache):
+        async def connect(self, *args: Any, **kwargs: Any) -> Any:
+            try:
+                return await super().connect(*args, **kwargs)
+            except BleakError as err:
+                attempt_errors.append(str(err))
+                raise
+
     try:
         client: GattClient = await establish_connection(
-            BleakClientWithServiceCache,
+            RecordingClient,
             device,
             device.name or device.address,
             disconnected_callback=on_disconnected,
@@ -219,9 +254,18 @@ async def _connect(
         # bleak-esphome raises this for a proxy without pairing support.
         raise PairingUnsupported(str(err)) from err
     except BleakError as err:
-        _LOGGER.debug("Connecting to %s failed: %r", device.address, err)
+        _LOGGER.debug(
+            "Connecting to %s failed: %r (attempts: %s)",
+            device.address,
+            err,
+            attempt_errors,
+        )
         message = str(err)
-        if any(marker in message.lower() for marker in PAIRING_FAILURE_MARKERS):
+        if any(
+            marker in text.lower()
+            for text in (message, *attempt_errors)
+            for marker in PAIRING_FAILURE_MARKERS
+        ):
             raise PairingFailed(message) from err
         raise ScaleConnectionError(message) from err
     return client
@@ -332,6 +376,17 @@ class ScaleSession:
         response = await self._ucp(UcpOpcode.DELETE_USER_DATA, b"")
         if response.result is not UcpResult.SUCCESS:
             raise UnexpectedResponse(f"delete refused: {response.result.name}")
+
+    async def factory_reset(self) -> None:
+        """Wipe every scale user on the scale (§4): write `00` to the reset
+        characteristic. No consent is needed. The scale forgets its bond keys and
+        ends the link, so do nothing else afterwards."""
+        uuid = self._model.factory_reset_uuid
+        if uuid is None:
+            raise UnexpectedResponse(
+                f"{self._model.name}: no known reset characteristic"
+            )
+        await self._write(uuid, b"\x00")
 
     # --- Syncing readings (protocol doc §3, §9.4b) ---
 

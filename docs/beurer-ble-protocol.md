@@ -212,7 +212,9 @@ so the consent code of that user is needed.
 ### Factory reset (`r0`, `BTScaleBF600ResetRepoImpl.kt`)
 Write `[0x00]` to the "reset" characteristic: custom svc / **FFF7** (BF990: FFCF/FFC2).
 This wipes all users. No consent is needed. On the BF450 the user list was empty
-afterwards, and the host had to remove its stale bond and pair again.
+afterwards, and the host had to remove its stale bond and pair again. The integration
+does this from the scale's configure menu (design §4.4): write `00`, let the scale end
+the link, then remove the proxy's bond (§9.6, V6).
 
 ### Scale settings (`h1` read / `i1` update, `BTScaleBF600Settings*RepoImpl.kt`)
 Characteristic: BF450 FFFF/FFF0 (§1). Two layouts:
@@ -558,7 +560,7 @@ subscriptions ~4.6 s (each GATT op ~0.4 s); consent → first frame 0.4 s.
 - Exact length of the awake/advertising window after a weigh-in.
 - FFF3 and FFF8 on the BF450: the app never uses them here (§9.1); their purpose is unknown.
 - Confirm the custom1 byte 4 hypothesis (more users, real strangers).
-- Whether lb/st mode never flags the pending slot, or only did so once (§9.6).
+- Whether lb/st mode ever fails to flag the pending slot: seen once, not reproduced (§9.6).
 
 ### 9.6 Through an ESPHome Bluetooth proxy (2026-10-19, design §8 V1–V8)
 
@@ -620,7 +622,8 @@ old value back restores kg. In lb mode the frames are **unchanged**: the weight 
 in kg (flags `0x02`, 0.005 kg resolution). The display unit is display-only. But the one
 weigh-in taken in lb mode was stored for its slot **without the slot being flagged
 pending** in the scan response for the rest of the wake; it was delivered at the next
-consent.
+consent. This was **not reproduced**: a later lb weigh-in on 2026-10-19 synced normally.
+HA ignores the display unit.
 
 **Factory reset with an existing bond (V6).** The proxy still held the old bond, the
 scale didn't. Bonding failed with ESP-IDF auth error 97 (most likely
@@ -629,6 +632,11 @@ terminated the link (`ESP_GATT_CONN_TERMINATE_PEER_USER`) and slept ~3 s later. 
 integration never got a connection, so its "renew the bond after a reset" step (§4)
 couldn't run. Removing the bond on the proxy (ESPHome `bluetooth_device_unpair`, which
 works without a connection) fixed it: the next connection bonded again.
+The error text is only in the first connect attempt ("Pairing failed due to error: 97");
+bleak-retry-connector's final exception says just "Disconnected". The integration therefore
+records the error of every attempt, removes the proxy's bond through the ESPHome API and
+connects again (design §3, §6). Bleak's own `unpair()` is no way out: ESPHome's client
+requires a connection, and the scale ends an unbonded link after ~0.5 s.
 
 **Timing (V7).**
 - A new weigh-in's slot appeared in the scan response ~10 s after stepping on (kg mode);

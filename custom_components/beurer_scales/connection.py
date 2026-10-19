@@ -12,6 +12,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
+from functools import partial
 
 from bleak.backends.device import BLEDevice
 
@@ -21,8 +22,10 @@ from homeassistant.components.bluetooth import (
     async_register_advertisement_callback,
 )
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_call_later
 
+from .bond import async_remove_bond
 from .const import DOMAIN
 from .protocol.errors import ScaleConnectionError
 from .protocol.models import ScaleModel
@@ -37,6 +40,31 @@ PATH_SETTLE = 1.5
 
 
 _LOCKS = "scale_locks"
+_SESSION_ENDED = "session_ended_at"
+
+
+def session_ended_signal(address: str) -> str:
+    """The dispatcher signal sent when any HA session with this scale has ended.
+
+    The scale sleeps ~1 s after HA disconnects, whoever held the session.
+    """
+    return f"{DOMAIN}_session_ended_{address}"
+
+
+@callback
+def session_ended_at(hass: HomeAssistant, address: str) -> float | None:
+    """When the last HA session with the scale ended, in event loop time.
+
+    Kept outside the coordinator, which a flow's new scale user reloads.
+    """
+    return _session_ends(hass).get(address)
+
+
+def _session_ends(hass: HomeAssistant) -> dict[str, float]:
+    ends: dict[str, float] = hass.data.setdefault(DOMAIN, {}).setdefault(
+        _SESSION_ENDED, {}
+    )
+    return ends
 
 
 class WakeTimeout(Exception):
@@ -120,12 +148,26 @@ async def async_open_session(
     that fits the wake window, for sessions that keep the scale awake (teaching).
     `deadline` (event loop time) ends the session earlier, for work that starts
     late in a wake.
+
+    A failed bond (a stale one after a factory reset) is cleared on the proxy
+    and the connect repeated once (#23).
     """
     if device is None:
         device = async_ble_device_from_address(hass, address, connectable=True)
     if device is None:
         raise ScaleConnectionError(f"no connectable Bluetooth path to {address}")
-    async with open_session(
-        device, model, session_timeout=session_timeout, deadline=deadline
-    ) as session:
-        yield session
+    opened = False
+    try:
+        async with open_session(
+            device,
+            model,
+            session_timeout=session_timeout,
+            deadline=deadline,
+            remove_bond=partial(async_remove_bond, hass, device),
+        ) as session:
+            opened = True
+            yield session
+    finally:
+        if opened:
+            _session_ends(hass)[address] = hass.loop.time()
+            async_dispatcher_send(hass, session_ended_signal(address))

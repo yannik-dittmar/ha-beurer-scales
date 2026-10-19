@@ -72,7 +72,7 @@ from .protocol.models import ScaleModel, model_by_name
 from .protocol.profile import Profile
 from .protocol.readings import Reading
 from .protocol.scale_user import CreatedScaleUser, create_scale_user
-from .protocol.teaching import TEACHING_READINGS, Teaching
+from .protocol.teaching import Teaching
 from .repairs import async_clear_scale_user_issues
 
 # Beurer's supported ranges for body-composition scales.
@@ -131,6 +131,7 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
         # Holds the connection from the wake through teaching.
         self._create_task: asyncio.Task[CreatedScaleUser] | None = None
         self._created: CreatedScaleUser | None = None
+        self._connected_event = asyncio.Event()
         self._created_event = asyncio.Event()
         self._teaching = Teaching()
         # When the create task connected, for the backlog rule.
@@ -170,98 +171,83 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
     async def async_step_create_wake(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        """Wait for the wake, then create the scale user on the scale."""
+        """Progress 1: wait for the step-on that wakes the scale; connect."""
         if self._create_task is None:
-            # A background task: it outlives the progress steps and the menu.
+            # A background task: it outlives the progress steps.
             self._create_task = self._get_entry().async_create_background_task(
                 self.hass, self._async_create(), "beurer_scales create scale user"
             )
         if result := self._progress_until(
             "create_wake",
-            "create",
+            "create_wake",
+            lambda: self._until_create_ends(self._connected_event.wait(), "connect"),
+        ):
+            return result
+        return self._after_stage("create_user")
+
+    async def async_step_create_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Progress 2: the scale user is being created on the scale."""
+        if result := self._progress_until(
+            "create_user",
+            "create_user",
             lambda: self._until_create_ends(self._created_event.wait(), "create"),
         ):
             return result
-        if self._create_task.done() and (reason := self._create_failure()):
-            return self._progress_failed(reason)
-        return self.async_show_progress_done(next_step_id="teach")
+        return self._after_stage("create_measure")
 
-    async def async_step_teach(
+    async def async_step_create_measure(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        """Teaching: wait for the next live reading of the new scale user."""
-        taken = len(self._teaching.readings)
+        """Progress 3: the scale measures; its reading teaches it the scale user."""
         if result := self._progress_until(
-            "teach",
-            "teach",
-            lambda: self._until_create_ends(
-                self._async_until_reading(taken + 1), "teach"
-            ),
-            {"reading": str(taken + 1), "readings": str(TEACHING_READINGS)},
+            "create_measure",
+            "create_measure",
+            lambda: self._until_create_ends(None, "measure"),
         ):
             return result
+        return self._after_stage("create_finish")
+
+    def _after_stage(self, next_step_id: str) -> SubentryFlowResult:
+        """Go on to the next stage, or end the flow if the create task failed."""
         assert self._create_task is not None
-        if not self._create_task.done():
-            return self.async_show_progress_done(next_step_id="teach_more")
-        if reason := self._create_failure():
+        if self._create_task.done() and (reason := self._create_failure()):
             return self._progress_failed(reason)
-        return self.async_show_progress_done(next_step_id="create_finish")
-
-    async def async_step_teach_more(
-        self, user_input: dict[str, Any] | None = None
-    ) -> SubentryFlowResult:
-        """Offer another teaching reading or finishing now."""
-        return self.async_show_menu(
-            step_id="teach_more",
-            menu_options=["teach", "teach_done"],
-            description_placeholders={
-                "reading": str(len(self._teaching.readings)),
-                "readings": str(TEACHING_READINGS),
-            },
-        )
-
-    async def async_step_teach_done(
-        self, user_input: dict[str, Any] | None = None
-    ) -> SubentryFlowResult:
-        """Finish teaching early: disconnect, then create the subentry."""
-        assert self._create_task is not None
-        self._teaching.finish()
-        await asyncio.wait({self._create_task})
-        if reason := self._create_failure():
-            return self.async_abort(reason=reason)
-        return await self.async_step_create_finish()
+        return self.async_show_progress_done(next_step_id=next_step_id)
 
     async def async_step_create_finish(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        """Create the subentry of the new scale user."""
+        """Create the subentry of the new scale user, naming the measured weight."""
+        placeholders = {"weight": self._measured_weight()}
         if self.source == SOURCE_REPAIR_CREATE:
             self._async_update_recreated_subentry()
-            return self.async_abort(reason="scale_user_repaired")
+            return self.async_abort(
+                reason="scale_user_recreated", description_placeholders=placeholders
+            )
         self._keep_teaching_readings()
         self._entry_created = True
         return self.async_create_entry(
             title=self._name,
             unique_id=self._new_unique_id(),
             data=self._new_data(),
-            description=self._teaching_ending(),
+            description="measured",
+            description_placeholders=placeholders,
         )
 
-    def _teaching_ending(self) -> str | None:
-        """Why teaching ended before all its readings, for the create message."""
-        if self._teaching.connection_lost:
-            return "teaching_connection_lost"
-        if self._teaching.timed_out:
-            return "teaching_timeout"
-        return None
+    def _measured_weight(self) -> str:
+        """The teaching reading's weight, for the confirmation."""
+        reading = self._teaching.reading
+        return "the weight" if reading is None else f"{reading.weight_kg:.1f} kg"
 
     @callback
     def async_remove(self) -> None:
         """Clean up after the flow closed, finished or not.
 
-        Before teaching ended, the scale user is deleted on the scale again. One
-        whose teaching ended with a reading stays on the scale, so it gets its
-        subentry even when the flow is closed without finishing.
+        Before the teaching reading, the scale user is deleted on the scale again.
+        One that got its reading stays on the scale, so it gets its subentry even
+        when the flow is closed without finishing.
         """
         if self._milestone is not None:
             self._milestone.cancel()
@@ -554,6 +540,7 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
                 self._model(),
                 session_timeout=_create_session_timeout(),
             ) as session:
+                self._connected_event.set()
                 await session.set_time(dt_util.now())
                 async with create_scale_user(session, self._new_profile) as created:
                     self._check_slot_free(created.slot)
@@ -618,37 +605,30 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
         return task
 
     def _until_create_ends(
-        self, milestone: Awaitable[Any], name: str
+        self, milestone: Awaitable[Any] | None, name: str
     ) -> asyncio.Task[None]:
         """A task that ends at `milestone` or with the create task, if earlier.
 
-        A background task: teaching holds it open, and tests that wait for
-        HA's tasks must not wait for teaching.
+        Without a milestone it ends with the create task. A background task:
+        teaching holds the create task open, and tests that wait for HA's tasks
+        must not wait for teaching.
         """
         return self.hass.async_create_background_task(
             self._async_until_either(milestone), f"beurer_scales {name}"
         )
 
-    async def _async_until_either(self, milestone: Awaitable[Any]) -> None:
+    async def _async_until_either(self, milestone: Awaitable[Any] | None) -> None:
         """Return at `milestone` or when the create task ends, whichever is first."""
         assert self._create_task is not None
-        waiting = asyncio.ensure_future(milestone)
+        waiting = {self._create_task}
+        if milestone is not None:
+            waiting.add(asyncio.ensure_future(milestone))
         try:
-            await asyncio.wait(
-                {waiting, self._create_task}, return_when=asyncio.FIRST_COMPLETED
-            )
+            await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
         finally:
-            waiting.cancel()
-
-    async def _async_until_reading(self, count: int) -> None:
-        """Return once teaching took `count` readings, except for the last one.
-
-        Teaching ends right after the last reading; the step waits for the create
-        task to disconnect instead.
-        """
-        if count >= TEACHING_READINGS:
-            await asyncio.get_running_loop().create_future()
-        await self._teaching.wait_for_readings(count)
+            for future in waiting:
+                if future is not self._create_task:
+                    future.cancel()
 
     def _create_failure(self) -> str | None:
         """The abort reason of a failed create task; None if it succeeded."""
@@ -722,7 +702,7 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
             self.hass,
             self._get_entry().entry_id,
             self._created.slot,
-            self._teaching.readings,
+            [] if self._teaching.reading is None else [self._teaching.reading],
             self._sync_start,
         )
 
@@ -871,12 +851,9 @@ def _create_session_timeout() -> float:
     """The time budget of a create session.
 
     Teaching keeps the scale awake (V3), so the session may outlast the wake
-    window; each teaching reading has its own timeout on top.
+    window; the teaching reading has its own timeout on top.
     """
-    return (
-        protocol_session.SESSION_TIMEOUT
-        + TEACHING_READINGS * protocol_teaching.TEACHING_TIMEOUT
-    )
+    return protocol_session.SESSION_TIMEOUT + protocol_teaching.TEACHING_TIMEOUT
 
 
 def _identity_fields() -> dict[probatio.Marker, Any]:

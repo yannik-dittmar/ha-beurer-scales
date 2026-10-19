@@ -18,14 +18,20 @@ leaves behind (renewed by unpair + pair), and a link that drops (weak signal).
 """
 
 import asyncio
+import contextlib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any, Literal
+from typing import Any, Literal, NoReturn
+from unittest.mock import patch
 
 from bleak.backends.device import BLEDevice
 from bleak.exc import BleakError
-from bleak_retry_connector import BleakConnectionError, BleakNotFoundError
+from bleak_retry_connector import (
+    BleakClientWithServiceCache,
+    BleakConnectionError,
+    BleakNotFoundError,
+)
 
 
 def _uuid(short: int) -> str:
@@ -35,6 +41,7 @@ def _uuid(short: int) -> str:
 CURRENT_TIME = _uuid(0x2A2B)
 USER_CONTROL_POINT = _uuid(0x2A9F)
 USER_LIST = _uuid(0xFFF1)
+FACTORY_RESET = _uuid(0xFFF7)
 DATE_OF_BIRTH = _uuid(0x2A85)
 GENDER = _uuid(0x2A8C)
 HEIGHT = _uuid(0x2A8E)
@@ -56,7 +63,6 @@ SLOT_COUNT = 8
 # "fails": the path tries to bond and fails, e.g. a BlueZ adapter without an agent.
 Pairing = Literal["supported", "unsupported", "fails"]
 PairingFailure = Literal["bluez", "kernel"]
-DisplayUnit = Literal["kg", "lb", "st"]
 # How the scale answers a consent for another slot in a connection that already
 # consented one. Unverified on a BF450 (design §8, V2), so the fake can do each.
 SecondConsent = Literal["allowed", "rejected", "dropped"]
@@ -132,9 +138,6 @@ class FakeScale:
     # Every User Control Point request written to the scale.
     ucp_requests: list[bytes] = field(default_factory=list)
     battery_level: int = 71
-    # The display unit, a scale setting HA never writes. Assumed (design V5): in
-    # lb/st the scale sends 2A9D in imperial units, flags bit 0 set, 0.01 lb.
-    display_unit: DisplayUnit = "kg"
     client: "FakeBleakClient | None" = None
     # Writes to these characteristics misbehave.
     write_failures: dict[str, WriteFailure] = field(default_factory=dict)
@@ -147,6 +150,14 @@ class FakeScale:
     bond_stale: bool = False
     # How often a client renewed the bond (unpair, then pair).
     rebonds: int = 0
+    # The host's path (an ESPHome proxy) holds a bond the scale forgot, e.g. after
+    # a factory reset: bonding fails with auth error 97, the scale ends the link,
+    # and bleak-retry-connector's last error is only "Disconnected" (§9.6, V6).
+    proxy_bond_stale: bool = False
+    # How often the scale was factory-reset over a connection (FFF7 `00`).
+    resets: int = 0
+    # How often a bond was removed on the path without a connection.
+    proxy_unpairs: int = 0
     # Pairing on an existing connection fails.
     pairing_fails: bool = False
     # Every write the scale received: (characteristic, data, with response).
@@ -166,6 +177,13 @@ class FakeScale:
         self.users.clear()
         self.bond_stale = True
         self.awake = False
+
+    async def remove_proxy_bond(self, *_args: Any) -> bool:
+        """Stand-in for `connection.async_remove_bond`: the proxy drops its bond."""
+        self.proxy_unpairs += 1
+        self.proxy_bond_stale = False
+        self.bond_stale = False
+        return True
 
     def wake(self) -> None:
         """Someone stepped on the scale: it advertises and accepts connections."""
@@ -240,8 +258,6 @@ class FakeScale:
         pending once the weigh-in is final (`finish_weigh_in`).
         """
         reading = reading.for_slot(slot)
-        if self.display_unit != "kg":
-            reading = reading.in_pounds()
         if (
             self.client is not None
             and self.connected
@@ -270,6 +286,8 @@ class FakeScale:
         if pair and self.pairing == "unsupported":
             # An ESPHome proxy without pairing support (bleak-esphome).
             raise NotImplementedError("Pairing is not available in this version")
+        if pair and self.proxy_bond_stale:
+            await self._fail_on_stale_proxy_bond(client_class, device, name, kwargs)
         if pair and self.pairing == "fails":
             raise BleakConnectionError(
                 f"{name} - {device.address}: Failed to connect after 2 attempt(s): "
@@ -279,6 +297,44 @@ class FakeScale:
             self, bonded=pair, disconnected_callback=kwargs.get("disconnected_callback")
         )
         return self.client
+
+    async def _fail_on_stale_proxy_bond(
+        self,
+        client_class: type[Any],
+        device: BLEDevice,
+        name: str,
+        kwargs: dict[str, Any],
+    ) -> NoReturn:
+        """Two connect attempts as bleak-retry-connector makes them: the first
+        fails on the bond, the second only reports "Disconnected". The errors
+        pass through the client class's `connect`, as in the real thing."""
+        errors = iter(
+            [BleakError("Pairing failed due to error: 97"), BleakError("Disconnected")]
+        )
+
+        async def failing_connect(*_args: Any, **_kwargs: Any) -> None:
+            raise next(errors)
+
+        def no_backend(self: Any, *_args: Any, **_kwargs: Any) -> None:
+            """No platform backend behind the client."""
+
+        with (
+            patch.object(BleakClientWithServiceCache, "__init__", no_backend),
+            patch.object(BleakClientWithServiceCache, "connect", failing_connect),
+        ):
+            client = client_class(
+                device,
+                disconnected_callback=kwargs.get("disconnected_callback"),
+                pair=True,
+                _is_retry_client=True,
+            )
+            for _ in range(2):
+                with contextlib.suppress(BleakError):
+                    await client.connect(timeout=10.0)
+        raise BleakConnectionError(
+            f"{name} - {device.address}: Failed to connect after 2 attempt(s): "
+            "Disconnected"
+        )
 
 
 class FakeBleakClient:
@@ -342,6 +398,12 @@ class FakeBleakClient:
             )
         elif uuid == USER_LIST and data == b"\x00":
             self._send_user_list()
+        elif uuid == FACTORY_RESET and data == b"\x00":
+            self._scale.factory_reset()
+            # The proxy keeps the bond the scale just forgot (§9.6, V6).
+            self._scale.proxy_bond_stale = True
+            self._scale.resets += 1
+            self.drop()
         elif uuid == USER_CONTROL_POINT:
             self._handle_ucp(data)
         elif uuid in PROFILE_CHARACTERISTICS:
@@ -505,20 +567,6 @@ class FakeReading:
     def for_slot(self, slot: int) -> "FakeReading":
         """The same reading, assigned to `slot`."""
         return self._with_weight(slot=slot)
-
-    def in_pounds(self) -> "FakeReading":
-        """The same reading with 2A9D in imperial units (0x2A9D spec)."""
-        frames = []
-        for short_uuid, frame in self.frames:
-            if short_uuid == 0x2A9D:
-                kg = int.from_bytes(frame[1:3], "little") * 0.005
-                raw_lb = round(kg / 0.45359237 / 0.01)
-                frame = (
-                    bytes([frame[0] | 0x01, *raw_lb.to_bytes(2, "little")])
-                    + (frame[3:])
-                )
-            frames.append((short_uuid, frame))
-        return FakeReading(tuple(frames))
 
     def _with_weight(
         self, *, timestamp: datetime | None = None, slot: int | None = None

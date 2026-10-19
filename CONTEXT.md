@@ -49,15 +49,33 @@ A reading the scale assigned to a scale user with uncertainty (the display shows
 A weigh-in that matches no scale user. The scale stores nothing for it and never delivers it.
 
 **Teaching**:
-Taking readings while a scale user is connected and consented, so the scale learns that scale user's weight and recognises them afterwards.
+Taking one reading while a new scale user is connected and consented, so the scale learns that scale user's weight and recognises them afterwards. The step-on that wakes the scale for the create flow is that reading; there are no further ones (ADR 0010).
 
 ### Synchronisation
 
 **Wake window**:
 The ~47 s after a weigh-in during which the scale advertises and accepts connections.
 
+**After-disconnect advertising**:
+The scale's advertising for 0-20 s after any HA session with it ends (a sync, a check or a flow's session). It is the tail of that session, not a wake: it triggers no check, notification or deletion.
+
 **Pending slot**:
 A slot that the scale's scan response lists as having unsynced readings (the slot list). Slots in a wake's first slot list were pending before the wake; a slot appended later belongs to that wake's weigh-in, which is final at that moment.
 
+**Active scan**:
+A Bluetooth scan in which the scale answers an advertisement with a scan response. HA asks for one at the start of each wake, because the scale lists its pending slots only in the scan response.
+
+**Silent wake**:
+A wake without any scan response, as on a passively scanning path. It says nothing about who stepped on; three in a row raise the no-scan-response repair.
+
+**Pending deletion**:
+A scale user removed in HA whose slot is still to be deleted on the scale at the next wake. Shown by the Pending deletions sensor; three wakes that started with one raise the failing-deletion repair.
+
 **Sync**:
 One connection during a wake window that collects the pending readings of one or more slots.
+
+**Factory reset**:
+Wipes every scale user on the scale (FFF7 `00`) and makes it forget its bond. HA does it from the scale's configure menu, then removes the stale bond and its own scale users.
+
+**Stale bond**:
+A bond the host's Bluetooth path (an ESPHome proxy or adapter) still holds for a scale that has forgotten it, which happens after a factory reset. Bonding fails until the path drops it. The integration removes it from an ESPHome proxy without a connection and connects again.

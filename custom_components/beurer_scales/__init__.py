@@ -19,7 +19,10 @@ from .coordinator import (
     reading_log_store,
     subentries_snapshot,
 )
-from .repairs import async_clear_orphaned_scale_user_issues
+from .repairs import (
+    async_clear_orphaned_scale_user_issues,
+    async_delete_obsolete_unit_issue,
+)
 from .pending_deletions import PendingDeletion, async_remove_pending_deletions
 
 PLATFORMS = [Platform.SENSOR]
@@ -52,6 +55,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: BeurerConfigEntry) -> bo
         )
     # A removed scale user takes its repair issue along.
     async_clear_orphaned_scale_user_issues(hass, entry)
+    async_delete_obsolete_unit_issue(hass, entry)
     entry.runtime_data = ScaleCoordinator(hass, entry)
     await entry.runtime_data.async_load()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

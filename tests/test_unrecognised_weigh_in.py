@@ -172,6 +172,10 @@ async def test_the_scale_options_offer_the_notification_on_by_default(
     entry = await setup_anna(hass)
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.MENU
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "options"}
+    )
     assert result["type"] is FlowResultType.FORM
     [key] = result["data_schema"].schema
     assert key == "notify_unrecognised"

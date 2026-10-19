@@ -213,16 +213,12 @@ async def test_reentering_a_wrong_code_again_shows_an_error(
 async def recreate_and_teach(
     hass: HomeAssistant, flow_id: str, scale: FakeScale
 ) -> dict[str, Any]:
-    """Confirm creating again, wake the scale, teach once and finish."""
+    """Confirm creating again, step on once and finish."""
     result = await submit_and_wake(hass, flow_id, scale, {})
-    assert result["step_id"] == "teach", result
+    assert result["step_id"] == "create_measure", result
     assert scale.client is not None
     assert scale.client.consented_slot is not None
     result = await step_off_and_on(hass, flow_id, scale, scale.client.consented_slot)
-    assert result["step_id"] == "teach_more", result
-    result = await hass.config_entries.subentries.async_configure(
-        flow_id, {"next_step_id": "teach_done"}
-    )
     await hass.async_block_till_done()
     return result
 
@@ -239,7 +235,8 @@ async def test_create_again_recreates_and_teaches_the_scale_user(
     result = await recreate_and_teach(hass, flow["flow_id"], fake_scale)
 
     assert result["type"] is FlowResultType.ABORT
-    assert result["reason"] == "scale_user_repaired"
+    assert result["reason"] == "scale_user_recreated"
+    assert result["description_placeholders"] == {"weight": "78.4 kg"}
     subentry = entry.subentries[subentry_id]
     assert subentry.title == "Anna"
     # Slot 1 is taken, so the scale gives Anna slot 2 again.
