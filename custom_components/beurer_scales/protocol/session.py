@@ -9,6 +9,7 @@ client and turns failures into the typed errors of `.errors`.
 import asyncio
 import contextlib
 import logging
+import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -48,6 +49,7 @@ from .models import (
     USER_CONTROL_POINT_UUID,
     ScaleModel,
 )
+
 from .profile import (
     Profile,
     encode_activity_level,
@@ -142,12 +144,25 @@ async def open_session(
         session_timeout = SESSION_TIMEOUT
     if response_timeout is None:
         response_timeout = RESPONSE_TIMEOUT
-    ends_at = asyncio.get_running_loop().time() + session_timeout
+    now = asyncio.get_running_loop().time()
+    ends_at = now + session_timeout
     if deadline is not None:
         ends_at = min(ends_at, deadline)
+    started = time.monotonic()
+    _LOGGER.debug(
+        "Session with %s: connecting via %s, %.1f s budget",
+        device.address,
+        _source(device),
+        ends_at - now,
+    )
     try:
         async with asyncio.timeout_at(ends_at):
             client = await _connect(device)
+            _LOGGER.debug(
+                "Session with %s: connected and bonded after %.2f s",
+                device.address,
+                time.monotonic() - started,
+            )
             session = ScaleSession(client, model, response_timeout=response_timeout)
             try:
                 yield session
@@ -155,6 +170,20 @@ async def open_session(
                 await session.disconnect()
     except TimeoutError as err:
         raise ScaleTimeout("the session ran out of time") from err
+    finally:
+        _LOGGER.debug(
+            "Session with %s: ended after %.2f s",
+            device.address,
+            time.monotonic() - started,
+        )
+
+
+def _source(device: BLEDevice) -> str:
+    """The adapter or proxy HA found the device through, for the logs."""
+    details = device.details
+    if isinstance(details, dict) and (source := details.get("source")):
+        return str(source)
+    return "unknown path"
 
 
 async def _connect(device: BLEDevice) -> GattClient:
@@ -171,6 +200,7 @@ async def _connect(device: BLEDevice) -> GattClient:
         # bleak-esphome raises this for a proxy without pairing support.
         raise PairingUnsupported(str(err)) from err
     except BleakError as err:
+        _LOGGER.debug("Connecting to %s failed: %r", device.address, err)
         message = str(err)
         if any(marker in message.lower() for marker in PAIRING_FAILURE_MARKERS):
             raise PairingFailed(message) from err
@@ -199,6 +229,7 @@ class ScaleSession:
         self._reading_subscriptions: set[str] = set()
         # The reading each FFF4 `01` completed, until teaching takes it.
         self._live_readings: asyncio.Queue[Reading] = asyncio.Queue()
+        self._started = time.monotonic()
 
     @property
     def model(self) -> ScaleModel:
@@ -242,6 +273,7 @@ class ScaleSession:
             UcpOpcode.CONSENT,
             bytes([slot, *consent_code.to_bytes(2, "little")]),
         )
+        _LOGGER.debug("Consent for slot %s: %s", slot, response.result.name)
         if response.result is not UcpResult.SUCCESS:
             raise ConsentRejected(f"slot {slot}: {response.result.name}")
 
@@ -320,6 +352,7 @@ class ScaleSession:
                 continue
 
             def on_notify(_sender: Any, data: bytearray, uuid: str = uuid) -> None:
+                self._log_frame("notify", uuid, bytes(data))
                 # FFF4 `01` only says a live reading has finished.
                 if uuid != self._model.live_reading_done_uuid:
                     self._readings.add(uuid, bytes(data))
@@ -376,6 +409,7 @@ class ScaleSession:
             data = await self._client.read_gatt_char(BATTERY_LEVEL_UUID)
         except BleakError as err:
             raise ScaleConnectionError(f"read battery: {err}") from err
+        self._log_frame("read", BATTERY_LEVEL_UUID, bytes(data))
         return data[0] if len(data) == 1 and data[0] <= 100 else None
 
     async def rebond(self) -> None:
@@ -394,6 +428,7 @@ class ScaleSession:
 
     async def disconnect(self) -> None:
         """Close the connection. Never raises."""
+        _LOGGER.debug("%+.2f s disconnecting", self._elapsed())
         try:
             async with asyncio.timeout(_DISCONNECT_TIMEOUT):
                 await self._client.disconnect()
@@ -416,6 +451,7 @@ class ScaleSession:
         queue = asyncio.Queue()
 
         def on_notify(_sender: Any, data: bytearray) -> None:
+            self._log_frame("notify", uuid, bytes(data))
             queue.put_nowait(bytes(data))
 
         try:
@@ -426,6 +462,7 @@ class ScaleSession:
         return queue
 
     async def _write(self, uuid: str, data: bytes) -> None:
+        self._log_frame("write", uuid, data)
         try:
             await self._client.write_gatt_char(
                 uuid, data, response=self._model.write_with_response
@@ -440,6 +477,20 @@ class ScaleSession:
         except TimeoutError as err:
             raise ScaleTimeout("the scale didn't answer") from err
 
+    def _elapsed(self) -> float:
+        return time.monotonic() - self._started
+
+    def _log_frame(self, kind: str, uuid: str, data: bytes) -> None:
+        """Log a frame with the time since the session connected (V1, V7)."""
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "%+.2f s %s %s %s",
+                self._elapsed(),
+                kind,
+                _short_uuid(uuid),
+                _redact(uuid, data),
+            )
+
     @staticmethod
     def _decode[T](decoder: Callable[[bytes], T], frame: bytes) -> T:
         try:
@@ -452,3 +503,24 @@ def _drain(queue: asyncio.Queue[bytes]) -> None:
     with contextlib.suppress(asyncio.QueueEmpty):
         while True:
             queue.get_nowait()
+
+
+_BASE_UUID_SUFFIX = "-0000-1000-8000-00805f9b34fb"
+
+
+def _short_uuid(uuid: str) -> str:
+    """`2a9f` for a Bluetooth base UUID, else the full UUID."""
+    if uuid.startswith("0000") and uuid.endswith(_BASE_UUID_SUFFIX):
+        return uuid[4:8]
+    return uuid
+
+
+def _redact(uuid: str, data: bytes) -> str:
+    """A frame in hex, with consent codes masked: HA's log is no place for them."""
+    if uuid == USER_CONTROL_POINT_UUID and data:
+        match data[0]:
+            case UcpOpcode.REGISTER_NEW_USER:
+                return f"{data[:1].hex()} ****"
+            case UcpOpcode.CONSENT:
+                return f"{data[:2].hex()} ****"
+    return data.hex()

@@ -1,5 +1,6 @@
 """The scale session, run directly against the fake scale (no Home Assistant)."""
 
+import logging
 from datetime import date, datetime
 
 import pytest
@@ -83,6 +84,23 @@ async def test_consent_with_the_right_code_succeeds(scale: FakeScale) -> None:
 
     assert scale.client is not None
     assert scale.client.consented_slot == 2
+
+
+async def test_debug_log_masks_consent_codes(
+    scale: FakeScale, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Frames are logged for hardware checks, but never a consent code."""
+    caplog.set_level(logging.DEBUG, logger="custom_components.beurer_scales")
+    scale.add_user(slot=2, consent_code=4321)
+
+    async with open_session(scale.ble_device, BF450) as session:
+        await session.register_user(consent_code=4321)
+        await session.consent(slot=2, consent_code=4321)
+
+    code = (4321).to_bytes(2, "little").hex()
+    assert "write 2a9f 01 ****" in caplog.text
+    assert "write 2a9f 0202 ****" in caplog.text
+    assert code not in caplog.text
 
 
 @pytest.mark.parametrize(("slot", "code"), [(2, 1234), (5, 4321)])

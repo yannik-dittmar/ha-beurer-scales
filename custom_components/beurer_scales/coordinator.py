@@ -208,6 +208,8 @@ class ScaleCoordinator:
         self._pending_before_wake: set[int] = set()
         self._slot_appended_this_wake = False
         self._device: BLEDevice | None = None
+        # Advertisement contents logged this wake, per path (design §8, V4).
+        self._logged_advertisements: set[tuple[Any, ...]] = set()
         self._policy = ReadingPolicy(model=self.model)
         self._reading_log = reading_log_store(hass, entry.entry_id)
         self.pending_deletions = PendingDeletions(hass, entry.entry_id)
@@ -274,6 +276,14 @@ class ScaleCoordinator:
             return
         start = dt_util.as_local(sync_start or dt_util.now()).replace(tzinfo=None)
         result = self._policy.apply(readings, start)
+        _LOGGER.debug(
+            "Slot %s of %s: %s reading(s), %s fresh, %s discarded",
+            slot,
+            self.address,
+            len(readings),
+            len(result.fresh),
+            len(result.discarded),
+        )
         self._reading_log.async_delay_save(
             self._reading_log_data, READING_LOG_SAVE_DELAY
         )
@@ -371,6 +381,7 @@ class ScaleCoordinator:
     @callback
     def _async_on_advertisement(self, info: BluetoothServiceInfoBleak) -> None:
         wake = self.wakes.async_advertisement()
+        self._async_log_advertisement(info, wake.elapsed)
         pending = pending_slots(info.service_data)
         if wake.elapsed < ALREADY_PENDING_WINDOW:
             self._pending_before_wake.update(pending)
@@ -396,6 +407,44 @@ class ScaleCoordinator:
         # wait for `_async_after_weigh_in`.
         if any(slot not in self._leftovers for slot in self._managed_pending):
             self._async_start_sync()
+
+    @callback
+    def _async_log_advertisement(
+        self, info: BluetoothServiceInfoBleak, elapsed: float
+    ) -> None:
+        """Log each advertisement content once per wake and path.
+
+        The raw packet tells an advertisement from a scan response, which shows
+        whether passive scanning would see the name and service data (V4).
+        """
+        if not _LOGGER.isEnabledFor(logging.DEBUG):
+            return
+        raw = info.raw
+        key = (
+            info.source,
+            info.name,
+            tuple(sorted((k, bytes(v)) for k, v in info.service_data.items())),
+            tuple(sorted((k, bytes(v)) for k, v in info.manufacturer_data.items())),
+            tuple(info.service_uuids),
+            info.connectable,
+            raw,
+        )
+        if key in self._logged_advertisements:
+            return
+        self._logged_advertisements.add(key)
+        _LOGGER.debug(
+            "Advertisement at %.1f s via %s (RSSI %s, connectable %s): name %r, "
+            "service data %s, manufacturer data %s, service UUIDs %s, raw %s",
+            elapsed,
+            info.source,
+            info.rssi,
+            info.connectable,
+            info.name,
+            {uuid: bytes(data).hex() for uuid, data in info.service_data.items()},
+            {cid: bytes(data).hex() for cid, data in info.manufacturer_data.items()},
+            info.service_uuids,
+            raw.hex() if raw else None,
+        )
 
     @callback
     def _async_start_sync(self) -> None:
@@ -428,6 +477,12 @@ class ScaleCoordinator:
         first, *others = subentries
         slot = int(first.data[CONF_SLOT])
         sync_start = dt_util.now()
+        _LOGGER.debug(
+            "Syncing slots %s of %s at %s",
+            [int(s.data[CONF_SLOT]) for s in subentries],
+            self.address,
+            self._wake_time(),
+        )
         self._refused_later.discard(slot)
 
         async def sync(session: ScaleSession) -> None:
@@ -474,6 +529,9 @@ class ScaleCoordinator:
         deadline = wake.falls_asleep_at - WAKE_END_MARGIN if wake else None
         try:
             if async_scale_held(self.hass, self.address):
+                _LOGGER.debug(
+                    "%s is held by a flow; trying at a later wake", self.address
+                )
                 return
             async with (
                 async_hold_scale(self.hass, self.address),
@@ -517,6 +575,11 @@ class ScaleCoordinator:
             async_clear_scale_user_issues(self.hass, subentry.subentry_id)
             self.async_process_readings(slot, readings, sync_start)
 
+    def _wake_time(self) -> str:
+        """How far into the current wake we are, for the logs."""
+        wake = self.wakes.current
+        return f"{wake.elapsed:.1f} s into the wake" if wake else "no wake"
+
     @callback
     def _async_update_listeners(self) -> None:
         for update in list(self._listeners):
@@ -526,6 +589,7 @@ class ScaleCoordinator:
 
     @callback
     def _async_on_wake(self, wake: Wake) -> None:
+        self._logged_advertisements.clear()
         self._pending_before_wake = set()
         self._slot_appended_this_wake = False
         # One moment per wake for the leftover sync, the pending deletions and
@@ -540,6 +604,15 @@ class ScaleCoordinator:
         otherwise nobody HA manages was recognised: read the user list and run
         the deletions in one connection.
         """
+        _LOGGER.debug(
+            "Weigh-in on %s final at %s: managed pending %s, slot appended %s, "
+            "syncing %s",
+            self.address,
+            self._wake_time(),
+            self._managed_pending,
+            self._slot_appended_this_wake,
+            self._syncing,
+        )
         if self._syncing or async_scale_held(self.hass, self.address):
             return
         if self._managed_pending:

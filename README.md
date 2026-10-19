@@ -99,6 +99,21 @@ Problems that need your action appear under **Settings → System → Repairs**.
 
 **Create the scale user again** creates it on the scale with the stored profile and a new consent code, followed by teaching. The scale may choose a different slot; the sensors and their history stay the same.
 
+## Debug logs
+
+When you report a problem, attach a debug log of one weigh-in. Turn it on with the action **Logger: Set level** (no restart needed):
+
+```yaml
+action: logger.set_level
+data:
+  custom_components.beurer_scales: debug
+  bleak_retry_connector: debug
+  bleak_esphome: debug
+  habluetooth.wrappers: debug
+```
+
+The log shows the scale's advertisements, which Bluetooth path Home Assistant connected through, how long connecting and bonding took, and every frame with its time since the connection opened. Consent codes are masked. The frames do contain your readings and profile, so look through the log before you post it.
+
 ## Documentation
 
 - Design: [`docs/design.md`](docs/design.md)
