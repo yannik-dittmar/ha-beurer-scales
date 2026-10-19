@@ -555,6 +555,85 @@ subscriptions ~4.6 s (each GATT op ~0.4 s); consent → first frame 0.4 s.
 
 ### 9.5 Still open
 - Exact length of the awake/advertising window after a weigh-in.
-- Whether the weight flags byte changes in lb/st mode.
 - FFF3 and FFF8 on the BF450: the app never uses them here (§9.1); their purpose is unknown.
 - Confirm the custom1 byte 4 hypothesis (more users, real strangers).
+- Whether lb/st mode never flags the pending slot, or only did so once (§9.6).
+
+### 9.6 Through an ESPHome Bluetooth proxy (2026-10-19, design §8 V1–V8)
+
+Setup: a test HA 2026.10.2 whose only Bluetooth path was an ESP32-C3 proxy (ESPHome
+2026.9.1, `bluetooth_proxy: active: true`), driving the integration; one earlier run
+went through an Everything Presence Lite (ESP32, ESPHome 2025.5.1) at RSSI −88. Same
+BF450 as above, factory-reset first. Two scale users with the fictional profiles of
+§9.3; the second user's weight was raised ~11 kg by holding a load, so the scale told
+them apart (`U-1` / `U-2`). No measured values are recorded here.
+
+**Advertisement vs scan response (V4).** The advertisement (ADV_IND) carries only:
+```
+02 01 05                      flags
+03 02 18 1d                   16-bit UUID list: 0x1D18 (0x181D byte-swapped)
+06 09 42 46 34 35 30          complete local name "BF450"
+08 1b xx xx xx xx xx xx 00    LE Bluetooth device address (public)
+03 19 80 0c                   appearance 0x0C80 (generic weight scale)
+```
+27 of 31 bytes, so the pending-slot list can't fit. It comes only in the **scan
+response**, together with manufacturer data for company ID `0x1106` (`00 01 00`):
+`06 ff 06 11 00 01 00` plus the `0x16` service data for `0x1D18` with the slot list. A
+passive scanner therefore sees every wake (name, UUID) but **never which slots are
+pending**. With the proxy scanning actively, the first scan response usually arrived
+within 0.3 s of the wake, but once only after 11 s.
+
+HA (habluetooth) merges an address's advertisement data: an ADV_IND keeps the service
+data of the last scan response. Right after HA disconnects, the first advertisement
+therefore still shows the slot list from before the sync; the next scan response
+(~0.4 s later) has the cleared list.
+
+**Bonding through the proxy (V1, V8).** The ESP32 proxy bonds with the BF450 well before
+the 0.5 s no-bond drop; ESPHome 2025.5.1 and 2026.9.1 both work.
+- First connection with bonding and a service discovery (cache miss): 0.6–6.0 s.
+- Later connections (bond and GATT cache on the proxy): 0.6–3.9 s.
+- One GATT request through the proxy: ~0.4 s, up to ~1.5 s on the first session or at
+  a weak signal.
+- One slot synced (time, subscriptions, consent, 1 reading, battery): 9.8 s.
+- Two slots in one connection: 25 s.
+- At RSSI −88 the link broke after 23 s (HCI error 8, connection timeout).
+
+**Two consents in one connection (V2).** Works: consent slot 2 → its stored readings →
+consent slot 1 (`20 02 01`) → its stored readings, all in one connection.
+
+**Teaching (V3).** While a scale user is consented, the scale stays awake (154 s in one
+session) and every step-off/step-on sends a live reading (2A9D → 2A9C → FFF5 → FFF6 →
+FFF4 `01`). The first reading after creating a scale user can arrive while HA is still
+subscribing: subscribe to the reading characteristics first.
+
+**Display unit (V5).** Settings (FFF0) can be written **without consent**:
+`ff 00 ff 1e 00` → `ff 01 ff 1e 00` switches the display to lb at once, and writing the
+old value back restores kg. In lb mode the frames are **unchanged**: the weight is still
+in kg (flags `0x02`, 0.005 kg resolution). The display unit is display-only. But the one
+weigh-in taken in lb mode was stored for its slot **without the slot being flagged
+pending** in the scan response for the rest of the wake; it was delivered at the next
+consent.
+
+**Factory reset with an existing bond (V6).** The proxy still held the old bond, the
+scale didn't. Bonding failed with ESP-IDF auth error 97 (most likely
+`ESP_AUTH_SMP_ENC_FAIL`: encryption with the stored key failed); the scale then
+terminated the link (`ESP_GATT_CONN_TERMINATE_PEER_USER`) and slept ~3 s later. The
+integration never got a connection, so its "renew the bond after a reset" step (§4)
+couldn't run. Removing the bond on the proxy (ESPHome `bluetooth_device_unpair`, which
+works without a connection) fixed it: the next connection bonded again.
+
+**Timing (V7).**
+- A new weigh-in's slot appeared in the scan response ~10 s after stepping on (kg mode).
+- Connecting *during* a weigh-in and consenting another scale user first aborted it. The
+  display showed each consented user with a sync icon (`U-2`, then `U-1`) and went dark
+  after the disconnect, although the person was still standing on the scale. No reading
+  was stored.
+- Connecting during a weigh-in and consenting the person standing on the scale let the
+  reading complete live.
+- Without a connection the scale advertised for up to ~25 s after a weigh-in.
+- After a host-initiated disconnect it advertised again for 0–20 s (observed: one
+  advertisement, 1.7 s, 17 s, 20 s), not always ~1 s as on BlueZ (§9.4b).
+
+**Display.** After the reset, before any scale user existed, a weigh-in showed only the
+weight. With a scale user and its profile, the display shows `U-n` and the full body
+composition.
