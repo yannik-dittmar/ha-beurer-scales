@@ -14,6 +14,7 @@ from .bond import async_remove_bond
 from .connection import async_hold_scale, async_open_session, async_wait_for_wake
 from .const import CONF_CONSENT_CODE, SUBENTRY_SCALE_USER
 from .coordinator import ScaleCoordinator
+from .repairs import async_delete_deletion_issue
 from .protocol.errors import ScaleConnectionError
 from .protocol.models import model_by_name
 from .const import CONF_MODEL
@@ -51,6 +52,7 @@ async def async_forget_scale_users(
     """
     for deletion in coordinator.pending_deletions.all():
         await coordinator.pending_deletions.async_discard(deletion)
+    async_delete_deletion_issue(hass, entry)
     coordinator.subentries_at_setup = {
         subentry_id: (title, {k: v for k, v in data.items() if k != CONF_CONSENT_CODE})
         for subentry_id, (title, data) in coordinator.subentries_at_setup.items()
