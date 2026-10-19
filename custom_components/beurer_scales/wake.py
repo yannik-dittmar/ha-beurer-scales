@@ -6,6 +6,12 @@ advertisement after the scale slept and ends when HA's connection put it back
 to sleep or when it stops advertising. Work that must wait for a point in the
 wake (a weigh-in is final 4–10 s after waking; ADR 0008 checks at ~25 s) is
 scheduled relative to the wake's start and dropped if the wake ends first.
+
+After HA disconnects the scale advertises again ~1.5 s later and goes on for
+0-20 s (protocol doc §9.6). Advertisements that start a wake within
+`AFTER_DISCONNECT_WINDOW` of HA's disconnect, whoever held the session (a sync
+or a flow), continue that session: the wake is marked `after_disconnect` and
+the coordinator schedules none of the ADR 0008 work for it.
 """
 
 import asyncio
@@ -21,14 +27,18 @@ _LOGGER = logging.getLogger(__name__)
 WAKE_GAP = 10.0
 # Unless a connection keeps it awake, the scale sleeps this long after waking.
 WAKE_WINDOW = 47.0
+# A wake starting this soon after HA disconnected is the scale's tail of
+# advertising after that session, not someone stepping on.
+AFTER_DISCONNECT_WINDOW = 5.0
 
 
 class Wake:
     """One wake of the scale."""
 
-    def __init__(self, hass: HomeAssistant) -> None:
+    def __init__(self, hass: HomeAssistant, after_disconnect: bool = False) -> None:
         """Start a wake now."""
         self._hass = hass
+        self.after_disconnect = after_disconnect
         self.started = hass.loop.time()
         self.last_advertisement = self.started
         self._timers: set[asyncio.TimerHandle] = set()
@@ -66,9 +76,19 @@ class Wake:
 class WakeTracker:
     """Follows the scale's wakes from its advertisements."""
 
-    def __init__(self, hass: HomeAssistant, on_wake: Callable[[Wake], None]) -> None:
-        """Call `on_wake` with each new wake as it starts."""
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        on_wake: Callable[[Wake], None],
+        last_disconnect: Callable[[], float | None] = lambda: None,
+    ) -> None:
+        """Call `on_wake` with each new wake as it starts.
+
+        `last_disconnect` tells when HA's last session with the scale ended (event
+        loop time); it outlives the tracker.
+        """
         self._hass = hass
+        self._last_disconnect = last_disconnect
         self._on_wake = on_wake
         self._wake: Wake | None = None
         self._gap_timer: asyncio.TimerHandle | None = None
@@ -87,15 +107,25 @@ class WakeTracker:
             WAKE_GAP, self.async_asleep, "it stopped advertising"
         )
         if self._wake is None:
-            _LOGGER.debug("The scale woke up")
-            self._wake = Wake(self._hass)
+            disconnected_at = self._last_disconnect()
+            after_disconnect = (
+                disconnected_at is not None
+                and self._hass.loop.time() - disconnected_at <= AFTER_DISCONNECT_WINDOW
+            )
+            _LOGGER.debug(
+                "The scale woke up%s",
+                " (still advertising after HA disconnected)"
+                if after_disconnect
+                else "",
+            )
+            self._wake = Wake(self._hass, after_disconnect)
             self._on_wake(self._wake)
         self._wake.last_advertisement = self._hass.loop.time()
         return self._wake
 
     @callback
-    def async_asleep(self, reason: str = "HA disconnected") -> None:
-        """The scale went to sleep, e.g. HA disconnected; end the wake."""
+    def async_asleep(self, reason: str) -> None:
+        """The scale went to sleep; end the wake."""
         if self._gap_timer is not None:
             self._gap_timer.cancel()
             self._gap_timer = None
@@ -108,6 +138,11 @@ class WakeTracker:
             )
             self._wake._async_end()
             self._wake = None
+
+    @callback
+    def async_disconnected(self) -> None:
+        """An HA session with the scale ended: it sleeps soon; end the wake."""
+        self.async_asleep("HA disconnected")
 
     @callback
     def async_stop(self) -> None:

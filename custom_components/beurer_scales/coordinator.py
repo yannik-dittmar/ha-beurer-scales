@@ -44,10 +44,13 @@ from homeassistant.components.bluetooth import (
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .connection import (
+    session_ended_at,
+    session_ended_signal,
     async_hold_scale,
     async_let_paths_settle,
     async_open_session,
@@ -240,7 +243,11 @@ class ScaleCoordinator:
         self.pending_deletions = PendingDeletions(
             hass, entry.entry_id, self._async_pending_deletions_changed
         )
-        self.wakes = WakeTracker(hass, self._async_on_wake)
+        self.wakes = WakeTracker(
+            hass,
+            self._async_on_wake,
+            lambda: session_ended_at(hass, self.address),
+        )
 
     async def async_load(self) -> None:
         """Restore the de-duplication log and the pending deletions; call
@@ -269,9 +276,18 @@ class ScaleCoordinator:
             self.hass, self._async_on_advertisement, self.address
         )
 
+        # Any HA session ends the wake, not only the coordinator's own: the
+        # scale sleeps ~1 s after HA disconnects.
+        stop_listening = async_dispatcher_connect(
+            self.hass,
+            session_ended_signal(self.address),
+            self.wakes.async_disconnected,
+        )
+
         @callback
         def stop() -> None:
             stop_watching()
+            stop_listening()
             self.wakes.async_stop()
 
         return stop
@@ -556,7 +572,6 @@ class ScaleCoordinator:
         starts. Leaves the scale alone if a flow holds it: the work waits for a
         later wake. Raises ScaleError.
         """
-        connected = False
         wake = self.wakes.current
         deadline = wake.falls_asleep_at - WAKE_END_MARGIN if wake else None
         try:
@@ -571,13 +586,10 @@ class ScaleCoordinator:
                 async with async_open_session(
                     self.hass, self.address, self.model, device, deadline=deadline
                 ) as session:
-                    connected = True
                     await work(session)
         finally:
+            # The end of the session ends the wake (see `async_start`).
             self._syncing = False
-            if connected:
-                # The scale sleeps ~1 s after HA disconnects.
-                self.wakes.async_asleep()
 
     async def _async_drain(
         self,
@@ -624,6 +636,11 @@ class ScaleCoordinator:
         self._listed_this_wake = None
         self._slot_appended_this_wake = False
         self._managed_pending = []
+        if wake.after_disconnect:
+            # The scale's tail of advertising after HA's own session: nothing
+            # to check (ADR 0008). A slot appended to a later scan response
+            # still syncs in `_async_on_advertisement`.
+            return
         self._async_count_deletion_wake()
         # One moment per wake for the sync of slots pending before it, the
         # pending deletions and the user-list check, so they share one

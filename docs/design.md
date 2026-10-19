@@ -123,6 +123,8 @@ At ~25 s into a wake the weigh-in is final (the scale appends its slot 4–10 s 
 - This detects a factory reset or a deleted scale user (§6).
 - If the option is on, a persistent notification says that someone was weighed but not recognised (with the weight, if the advert or user list provides it; otherwise without).
 
+**After HA's own disconnect** the scale advertises again ~1.5 s later, for 0-20 s (protocol doc §9.6). Any HA session ending counts, a flow's teaching session as much as a sync. Advertisements within 5 s of a session's end are not a wake: the 25 s moment above is not scheduled for them, so there is no second connection, user-list check, notification or deletion run. HA's merged slot list may still show the slots from before the sync; only a slot appended to a later scan response syncs, so someone stepping on right after a sync is still handled.
+
 ### 5.4 Reading policy
 
 - **Fresh reading:** written to the scale user's entities right away. The entity state time is the sync time, seconds after the weigh-in.
