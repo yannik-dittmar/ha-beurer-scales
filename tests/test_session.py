@@ -1,11 +1,13 @@
 """The scale session, run directly against the fake scale (no Home Assistant)."""
 
+import asyncio
 import logging
 from datetime import date, datetime
 
 import pytest
 
 from custom_components.beurer_scales.protocol.errors import (
+    ConnectionLost,
     ConsentRejected,
     PairingFailed,
     PairingUnsupported,
@@ -196,3 +198,19 @@ async def test_a_connection_failure_is_not_a_pairing_failure(scale: FakeScale) -
             pass
 
     assert not isinstance(caught.value, PairingFailed | PairingUnsupported)
+
+
+async def test_a_dropped_link_ends_the_wait_for_a_live_reading(
+    scale: FakeScale,
+) -> None:
+    """A weak signal breaks the link; waiting for a reading fails at once."""
+    scale.add_user(slot=2, consent_code=4321)
+
+    async with open_session(scale.ble_device, BF450) as session:
+        await session.subscribe_readings()
+        await session.consent(slot=2, consent_code=4321)
+        scale.drop_link()
+
+        with pytest.raises(ConnectionLost):
+            async with asyncio.timeout(1):
+                await session.wait_for_live_reading()

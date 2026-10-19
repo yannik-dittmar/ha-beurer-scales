@@ -57,7 +57,9 @@ from .const import (
 from .coordinator import BeurerConfigEntry, async_hand_over_readings
 from .protocol import session as protocol_session
 from .protocol import teaching as protocol_teaching
+from .pending_deletions import PendingDeletion
 from .protocol.errors import (
+    ConnectionLost,
     ConsentRejected,
     NoFreeSlot,
     PairingFailed,
@@ -242,8 +244,16 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
             title=self._name,
             unique_id=self._new_unique_id(),
             data=self._new_data(),
-            description="teaching_timeout" if self._teaching.timed_out else None,
+            description=self._teaching_ending(),
         )
+
+    def _teaching_ending(self) -> str | None:
+        """Why teaching ended before all its readings, for the create message."""
+        if self._teaching.connection_lost:
+            return "teaching_connection_lost"
+        if self._teaching.timed_out:
+            return "teaching_timeout"
+        return None
 
     @callback
     def async_remove(self) -> None:
@@ -550,7 +560,16 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
                     self._created = created
                     self._created_event.set()
                     await session.subscribe_readings()
-                    await self._teaching.run(session)
+                    try:
+                        await self._teaching.run(session)
+                    except ConnectionLost:
+                        # Deleting it needs a link: do it at the next wake.
+                        await (
+                            self._get_entry().runtime_data.pending_deletions.async_add(
+                                PendingDeletion(created.slot, created.consent_code)
+                            )
+                        )
+                        raise
         return created
 
     def _progress_until(
@@ -641,6 +660,10 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
             self._create_task.result()
         except TeachingTimeout:
             return "teaching_timeout"
+        except ConnectionLost as err:
+            if self._created is not None:
+                return "teaching_connection_lost"
+            return _failure_reason(err)
         except NoFreeSlot:
             return "no_free_slot"
         except SlotHeldByOtherScaleUser:

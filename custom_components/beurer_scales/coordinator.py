@@ -42,7 +42,12 @@ from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from .connection import async_hold_scale, async_open_session, async_scale_held
+from .connection import (
+    async_hold_scale,
+    async_let_paths_settle,
+    async_open_session,
+    async_scale_held,
+)
 from .discards import async_notify_discarded
 from .pending_deletions import PendingDeletions
 from .const import (
@@ -533,14 +538,14 @@ class ScaleCoordinator:
                     "%s is held by a flow; trying at a later wake", self.address
                 )
                 return
-            async with (
-                async_hold_scale(self.hass, self.address),
-                async_open_session(
+            async with async_hold_scale(self.hass, self.address):
+                if wake is not None:
+                    await async_let_paths_settle(self.hass, wake.started)
+                async with async_open_session(
                     self.hass, self.address, self.model, device, deadline=deadline
-                ) as session,
-            ):
-                connected = True
-                await work(session)
+                ) as session:
+                    connected = True
+                    await work(session)
         finally:
             self._syncing = False
             if connected:

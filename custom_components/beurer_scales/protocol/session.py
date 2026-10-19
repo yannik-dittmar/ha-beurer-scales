@@ -10,7 +10,7 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -21,6 +21,7 @@ from bleak.exc import BleakError
 from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
 
 from .errors import (
+    ConnectionLost,
     ConsentRejected,
     NoFreeSlot,
     PairingFailed,
@@ -149,6 +150,16 @@ async def open_session(
     if deadline is not None:
         ends_at = min(ends_at, deadline)
     started = time.monotonic()
+    disconnected = asyncio.Event()
+
+    def on_disconnected(_client: Any) -> None:
+        _LOGGER.debug(
+            "Session with %s: link closed after %.2f s",
+            device.address,
+            time.monotonic() - started,
+        )
+        disconnected.set()
+
     _LOGGER.debug(
         "Session with %s: connecting via %s, %.1f s budget",
         device.address,
@@ -157,13 +168,18 @@ async def open_session(
     )
     try:
         async with asyncio.timeout_at(ends_at):
-            client = await _connect(device)
+            client = await _connect(device, on_disconnected)
             _LOGGER.debug(
                 "Session with %s: connected and bonded after %.2f s",
                 device.address,
                 time.monotonic() - started,
             )
-            session = ScaleSession(client, model, response_timeout=response_timeout)
+            session = ScaleSession(
+                client,
+                model,
+                response_timeout=response_timeout,
+                disconnected=disconnected,
+            )
             try:
                 yield session
             finally:
@@ -186,12 +202,15 @@ def _source(device: BLEDevice) -> str:
     return "unknown path"
 
 
-async def _connect(device: BLEDevice) -> GattClient:
+async def _connect(
+    device: BLEDevice, on_disconnected: Callable[[Any], None]
+) -> GattClient:
     try:
         client: GattClient = await establish_connection(
             BleakClientWithServiceCache,
             device,
             device.name or device.address,
+            disconnected_callback=on_disconnected,
             max_attempts=CONNECT_ATTEMPTS,
             # The scale drops unbonded links after ~0.5 s (ADR 0002).
             pair=True,
@@ -217,9 +236,11 @@ class ScaleSession:
         model: ScaleModel,
         *,
         response_timeout: float = RESPONSE_TIMEOUT,
+        disconnected: asyncio.Event | None = None,
     ) -> None:
-        """Wrap a connected client."""
+        """Wrap a connected client; `disconnected` is set when its link closes."""
         self._client = client
+        self._disconnected = disconnected or asyncio.Event()
         self._model = model
         self._response_timeout = response_timeout
         self._notifications: dict[str, asyncio.Queue[bytes]] = {}
@@ -397,9 +418,9 @@ class ScaleSession:
         the scale is quiet. Has no timeout of its own.
         """
         if self._model.live_reading_done_uuid:
-            return await self._live_readings.get()
+            return await self._unless_disconnected(self._live_readings.get())
         while True:
-            await self._reading_frame.wait()
+            await self._unless_disconnected(self._reading_frame.wait())
             if new := await self.collect_readings(quiet_period=quiet_period):
                 return new[-1]
 
@@ -473,9 +494,26 @@ class ScaleSession:
     async def _receive(self, queue: asyncio.Queue[bytes]) -> bytes:
         try:
             async with asyncio.timeout(self._response_timeout):
-                return await queue.get()
+                return await self._unless_disconnected(queue.get())
         except TimeoutError as err:
             raise ScaleTimeout("the scale didn't answer") from err
+
+    async def _unless_disconnected[T](self, waiting: Awaitable[T]) -> T:
+        """Await `waiting`; raise ConnectionLost if the link closes first.
+
+        Nothing arrives over a closed link, so a wait would only end at its
+        timeout, if it has one at all.
+        """
+        task = asyncio.ensure_future(waiting)
+        lost = asyncio.ensure_future(self._disconnected.wait())
+        try:
+            await asyncio.wait({task, lost}, return_when=asyncio.FIRST_COMPLETED)
+            if task.done():
+                return task.result()
+            raise ConnectionLost("the scale dropped the connection")
+        finally:
+            lost.cancel()
+            task.cancel()
 
     def _elapsed(self) -> float:
         return time.monotonic() - self._started

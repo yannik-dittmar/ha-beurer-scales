@@ -7,7 +7,7 @@ scale learns their weight from it (CONTEXT.md, design §4.1 step 4).
 
 import asyncio
 
-from .errors import TeachingTimeout
+from .errors import ConnectionLost, TeachingTimeout
 from .readings import Reading
 from .session import ScaleSession
 
@@ -28,6 +28,7 @@ class Teaching:
         self._changed = asyncio.Event()
         self._finish = asyncio.Event()
         self.timed_out = False
+        self.connection_lost = False
         self.ended = False
 
     @property
@@ -51,7 +52,8 @@ class Teaching:
         The session must be subscribed to readings and consented as the scale user.
         `timeout` applies to each reading. A timeout after at least one reading
         just ends teaching (`timed_out`); before the first one it raises
-        TeachingTimeout.
+        TeachingTimeout. A broken link likewise ends teaching
+        (`connection_lost`), or raises ConnectionLost before the first reading.
         """
         if timeout is None:
             timeout = TEACHING_TIMEOUT
@@ -69,7 +71,13 @@ class Teaching:
                     reading.cancel()
                     finish.cancel()
                 if reading in done:
-                    self._readings.append(reading.result())
+                    try:
+                        self._readings.append(reading.result())
+                    except ConnectionLost:
+                        if not self._readings:
+                            raise
+                        self.connection_lost = True
+                        return
                     self._changed.set()
                 elif finish in done:
                     return

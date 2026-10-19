@@ -50,7 +50,7 @@ Both ask for a **person** and a **name**. Both are optional, but you need at lea
 2. Step on the scale to wake it when asked. The flow waits up to 3 minutes. Home Assistant then connects and creates the scale user on the scale. It picks the consent code itself and stores it; you never need to know it.
 3. **Teaching.** While Home Assistant stays connected, the new scale user steps off the scale and on again, standing still until the result shows ("reading 1 of 3"). Each reading teaches the scale that person's weight so it recognises them later. After each reading you can take another one or finish; after the third reading the flow finishes on its own.
 
-If the scale is full, the flow stops and asks you to remove a scale user first. If you cancel the flow, or nobody steps on the scale for the first teaching reading, Home Assistant deletes the new scale user from the scale again so it doesn't confuse recognition. If teaching times out after at least one reading, the scale user is kept with the readings taken so far.
+If the scale is full, the flow stops and asks you to remove a scale user first. If you cancel the flow, or nobody steps on the scale for the first teaching reading, Home Assistant deletes the new scale user from the scale again so it doesn't confuse recognition. If teaching times out or the Bluetooth connection breaks after at least one reading, the scale user is kept with the readings taken so far. If the connection breaks before the first reading, Home Assistant deletes the new scale user at the scale's next wake. A connection that breaks usually means the proxy is too far from the scale.
 
 ### Adopt an existing slot
 

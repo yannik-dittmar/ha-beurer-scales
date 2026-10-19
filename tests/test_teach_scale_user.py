@@ -8,6 +8,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.beurer_scales.pending_deletions import PendingDeletion
+
 from .conftest import SCALE_ADDRESS
 from .fake_scale import FakeScale
 from .test_adopt_scale_user import only_subentry
@@ -190,3 +192,40 @@ async def test_aborting_during_teaching_deletes_the_scale_user(
     assert fake_scale.deleted_while_connected == [SLOT]
     assert loaded_scale.subentries == {}
     assert not fake_scale.connected
+
+
+async def test_a_lost_link_after_one_reading_keeps_the_scale_user(
+    hass: HomeAssistant, loaded_scale: MockConfigEntry, fake_scale: FakeScale
+) -> None:
+    """The link breaks while waiting for the second reading: teaching ends at
+    once with what it has, instead of waiting on a dead connection (#17)."""
+    result = await start_teaching(hass, loaded_scale, fake_scale)
+    await step_off_and_on(hass, result["flow_id"], fake_scale, SLOT)
+    await choose(hass, result["flow_id"], "teach")
+
+    fake_scale.drop_link()
+    result = await after_progress(hass, result["flow_id"], "teach")
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["description"] == "teaching_connection_lost"
+    assert only_subentry(loaded_scale).unique_id == f"slot_{SLOT}"
+    assert list(fake_scale.users) == [SLOT]
+
+
+async def test_a_lost_link_before_the_first_reading_deletes_at_the_next_wake(
+    hass: HomeAssistant, loaded_scale: MockConfigEntry, fake_scale: FakeScale
+) -> None:
+    """Without a reading the scale user isn't wanted, but it can't be deleted
+    without a link: the deletion waits for the next wake."""
+    result = await start_teaching(hass, loaded_scale, fake_scale)
+    consent_code = fake_scale.users[SLOT].consent_code
+
+    fake_scale.drop_link()
+    result = await after_progress(hass, result["flow_id"], "teach")
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "teaching_connection_lost"
+    assert loaded_scale.subentries == {}
+    assert loaded_scale.runtime_data.pending_deletions.all() == [
+        PendingDeletion(slot=SLOT, consent_code=consent_code)
+    ]
