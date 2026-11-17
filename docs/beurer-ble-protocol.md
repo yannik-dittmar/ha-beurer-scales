@@ -25,6 +25,7 @@ two protocol families:
 | Family | Models | Basis |
 |---|---|---|
 | **"BF600" (UDS-based)** | BF105, BF1000, BF405, **BF450**, BF451, BF500, BF600, BF720, BF722, BF850, BF880, BF915, BF950, BF980, BF990, GS435, SRBF1 | Bluetooth SIG Weight Scale (0x181D), Body Composition (0x181B), User Data Service (0x181C) + Beurer custom service |
+| **SBF77 (Silvercrest)** | SBF77 | Standard Weight Scale (0x181D), Body Composition (0x181B), User Data (0x181C) + custom service (0xFFFF); matches the BF950 profile |
 | **"BF700" (proprietary)** | BF700, BF710 | Single service 0xFFE0 / char 0xFFE1, `0xF7`/`0xE7`-prefixed command protocol (same family as Sanitas SBF70) |
 
 Model capabilities are expressed as ~90 empty marker interfaces in package `jp.*`
@@ -49,10 +50,19 @@ Rules from `vi.f` (`ScaleGeneralServiceConfigurationImpl.kt`) and `vi.g`
 | BF850 | FFF0 | FFF0 | FFF2 | FFF1 | FFF3 | FFF6 | FFF4 | 0007 | 2A9D+2A9C |
 | BF880 (wifi) | FFFF | FFFF | FFF1 | FFF0 | FFF2 | 0002 | FFF4 | 0007 | 2A9D+2A9C + FFF5 |
 | BF915 / BF950 | FFFF | FFFF | 0001 | 0000 | 0004 | 0002 | 0006 | 0007 | 2A9D+2A9C |
+| **SBF77 (Silvercrest)** | FFFF | FFFF | 0001 | 0000 | 0004 | 0002 | 0006 | - | 2A9D+2A9C |
 | BF980 (wifi) | FFFF | FFFF | FFF1 | FFF0 | FFF2 | 0002 | FFF4 | 0007 | 2A9D+2A9C + FFF5 |
 | BF990 (wifi) | FFFF | FFFF | FFF1 | FFF0 | FFF2 | 0002 | FFF4 | FFF9 | 2A9D+2A9C + FFF5/FFF7/FFF8 (20-byte frames) |
 | GS435 | 181D | FFFF | 0001 | 0000 | FFF3 | FFF6 | 0006 | 0007 | 2A9D only (weight-only scale) |
 | SRBF1 | FFF0 | FFF0 | FFF2 | FFF1 | FFF3 | FFF6 | FFF4 | 0007 | 2A9D+2A9C |
+
+The separate SBF77 row is based on a user-provided nRF Connect capture from
+2026-11-13; it is not one of the Beurer app's listed models above. The capture
+also shows custom characteristics 0005 (copy user measurement list) and 000B
+(reference weight/body fat), plus service FAA0. The integration currently reads
+only the standard 2A9D and 2A9C measurement characteristics. The capture showed
+no 0007, FFF5 or FFF6 characteristic. OpenScale also maps the SBF77 to its BF950
+profile ([issue #681](https://github.com/oliexdev/openScale/issues/681)).
 
 Standard characteristics common to the family:
 

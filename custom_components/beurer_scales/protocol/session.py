@@ -442,6 +442,12 @@ class ScaleSession:
                 raise ScaleConnectionError(f"subscribe {uuid}: {err}") from err
             self._reading_subscriptions.add(uuid)
 
+    async def request_live_measurement(self) -> None:
+        """Ask the scale to take a live measurement for the consented user."""
+        uuid = self._model.live_reading_done_uuid
+        if uuid is not None:
+            await self._write(uuid, b"\x00")
+
     async def collect_readings(
         self, *, quiet_period: float | None = None
     ) -> list[Reading]:

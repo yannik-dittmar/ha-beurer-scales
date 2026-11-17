@@ -127,6 +127,26 @@ async def test_a_slot_appended_to_a_later_scan_response_syncs_at_once(
     assert scale.connection_attempts == 1
 
 
+async def test_a_late_appended_slot_syncs_after_the_wake_window(
+    hass: HomeAssistant,
+    anna_pending_before: FakeScale,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """A fresh weigh-in during the post-disconnect tail gets a new session budget."""
+    scale = anna_pending_before
+    scale.users[2].stored_readings.clear()
+    await load_anna(hass)
+    await wake_scale(hass, scale)
+    await stay_awake(hass, freezer, scale, 48)
+
+    anna_weighs_in(scale)
+    scale.finish_weigh_in()
+    await inject_advertisement(hass, scan_response(scale))
+
+    assert state(hass, WEIGHT).state == "78.4"
+    assert scale.connection_attempts == 1
+
+
 async def test_a_slot_list_merged_into_an_advertisement_is_not_trusted(
     hass: HomeAssistant, fake_scale: FakeScale, freezer: FrozenDateTimeFactory
 ) -> None:

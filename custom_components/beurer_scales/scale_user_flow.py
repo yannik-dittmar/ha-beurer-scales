@@ -162,9 +162,11 @@ class ScaleUserSubentryFlow(ConfigSubentryFlow):
                 return await self.async_step_create_wake()
 
         schema = probatio.Schema({**_identity_fields(), **_profile_fields()})
+        suggested_values = self._input.copy()
+        suggested_values.setdefault(PROFILE_BIRTH_DATE, "1990-01-01")
         return self.async_show_form(
             step_id="create",
-            data_schema=self.add_suggested_values_to_schema(schema, self._input),
+            data_schema=self.add_suggested_values_to_schema(schema, suggested_values),
             errors=errors,
         )
 

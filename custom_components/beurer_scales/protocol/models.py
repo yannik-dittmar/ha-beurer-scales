@@ -1,7 +1,8 @@
 """Supported scale models and how to recognise them in an advertisement.
 
-The model table covers the BF600 (UDS-based) family of protocol doc §1 and §7.
-Only the BF450/BF451 are verified on real hardware; the rest follows the app.
+The model table covers the BF600 (UDS-based) family of protocol doc §1 and §7,
+plus the Silvercrest SBF77, which uses the BF950 profile. Only the BF450/BF451
+are verified on real hardware; the rest follows the app or captured GATT data.
 """
 
 from collections.abc import Iterable
@@ -253,6 +254,7 @@ MODELS: tuple[ScaleModel, ...] = (
     _model("BF880", _GATT_FFF1, _HEART_RATE, _WIFI),
     _model("BF915", _GATT_0001),
     _model("BF950", _GATT_0001),
+    _model("SBF77", _GATT_0001),
     _model("BF980", _GATT_FFF1, _HEART_RATE, _WIFI),
     # Its 20-byte FFF5/FFF7/FFF8 frames aren't decoded yet (§5.4).
     _model("BF990", _GATT_FFF1, _WIFI),

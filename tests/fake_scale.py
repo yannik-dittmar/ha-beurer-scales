@@ -56,6 +56,7 @@ PROFILE_CHARACTERISTICS = (
 )
 BATTERY_LEVEL = _uuid(0x2A19)
 TAKE_MEASUREMENT = _uuid(0xFFF4)
+TAKE_MEASUREMENT_0006 = _uuid(0x0006)
 
 SWAPPED_WEIGHT_SCALE_UUID = _uuid(0x1D18)
 SLOT_COUNT = 8
@@ -408,6 +409,8 @@ class FakeBleakClient:
             self._handle_ucp(data)
         elif uuid in PROFILE_CHARACTERISTICS:
             self._write_profile(uuid, data)
+        elif uuid in {TAKE_MEASUREMENT, TAKE_MEASUREMENT_0006} and data == b"\x00":
+            pass
         else:
             raise BleakError(f"Write to unsupported characteristic {uuid}")
 

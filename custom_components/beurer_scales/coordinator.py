@@ -54,6 +54,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .connection import (
+    _is_local_adapter,
     session_ended_at,
     session_ended_signal,
     async_hold_scale,
@@ -448,7 +449,22 @@ class ScaleCoordinator:
             or async_scale_held(self.hass, self.address)
         ):
             return
-        self._device = info.device if info.connectable else None
+        # Prefer a proxy device over the local adapter: the BLE bond for the
+        # SBF77 (and similar scales that need MITM pairing) lives only on the
+        # proxy.  When the latest advertisement came from a proxy, record it.
+        # When it came from the local adapter, keep whatever proxy device we
+        # already have -- only fall back to the local device if we have nothing.
+        if info.connectable:
+            if not _is_local_adapter(info):
+                # Proxy path: always prefer this.
+                self._device = info.device
+            elif self._device is None:
+                # Local path, no proxy seen yet: use as a last resort.
+                self._device = info.device
+        else:
+            # Non-connectable advertisement: only clear device if from proxy.
+            if not _is_local_adapter(info):
+                self._device = None
         if pending is None:
             return
         managed = self._managed_slots()
@@ -504,10 +520,11 @@ class ScaleCoordinator:
     def _async_start_sync(self, fresh: Collection[int] = ()) -> None:
         """Sync the slots of the last slot list that are still managed;
         `fresh` were just appended to it."""
+        fresh_slots = tuple(fresh)
         managed = self._managed_slots()
         order = sync_order(
             [s for s in self._managed_pending if s in managed],
-            fresh,
+            fresh_slots,
             self._refused_later,
         )
         if not order:
@@ -515,12 +532,20 @@ class ScaleCoordinator:
         self._syncing = True
         self.entry.async_create_background_task(
             self.hass,
-            self._async_sync([managed[slot] for slot in order], self._device),
+            self._async_sync(
+                [managed[slot] for slot in order],
+                self._device,
+                slot_appended=bool(fresh_slots),
+            ),
             f"{DOMAIN} sync {self.address}",
         )
 
     async def _async_sync(
-        self, subentries: list[ConfigSubentry], device: BLEDevice | None
+        self,
+        subentries: list[ConfigSubentry],
+        device: BLEDevice | None,
+        *,
+        slot_appended: bool = False,
     ) -> None:
         """Sync the first scale user, then drain the others in the same connection.
 
@@ -559,7 +584,7 @@ class ScaleCoordinator:
             await self._async_run_pending_deletions(session, consented=True)
 
         try:
-            await self._async_in_session(sync, device)
+            await self._async_in_session(sync, device, slot_appended=slot_appended)
         except ScaleError as err:
             _LOGGER.warning("Syncing slot %s of %s failed: %r", slot, self.address, err)
             if isinstance(err, PairingUnsupported | PairingFailed):
@@ -570,6 +595,8 @@ class ScaleCoordinator:
         self,
         work: Callable[[ScaleSession], Awaitable[None]],
         device: BLEDevice | None = None,
+        *,
+        slot_appended: bool = False,
     ) -> None:
         """Hold the scale and run `work` in a session; the scale sleeps after it.
 
@@ -578,7 +605,14 @@ class ScaleCoordinator:
         later wake. Raises ScaleError.
         """
         wake = self.wakes.current
-        deadline = wake.falls_asleep_at - WAKE_END_MARGIN if wake else None
+        # A newly appended slot means the weigh-in just finished. It may be a
+        # second step-on during the post-disconnect advertising tail, whose
+        # wake timer started before that weigh-in.
+        deadline = (
+            wake.falls_asleep_at - WAKE_END_MARGIN
+            if wake and not slot_appended
+            else None
+        )
         try:
             if async_scale_held(self.hass, self.address):
                 _LOGGER.debug(

@@ -9,6 +9,7 @@ the coordinator never waits behind a flow: it leaves the scale alone while
 """
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -20,6 +21,7 @@ from homeassistant.components.bluetooth import (
     BluetoothServiceInfoBleak,
     async_ble_device_from_address,
     async_register_advertisement_callback,
+    async_scanner_devices_by_address,
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
@@ -31,12 +33,73 @@ from .protocol.errors import ScaleConnectionError
 from .protocol.models import ScaleModel
 from .protocol.session import ScaleSession, open_session
 
+_LOGGER = logging.getLogger(__name__)
+
 # How long a flow waits for someone to step on the scale.
 WAKE_TIMEOUT = 180
 # Proxies report a wake's first advertisements at slightly different times.
 # Connecting at the very first one leaves HA a single path to choose from,
 # which in the field was a distant proxy whose link broke (#17).
 PATH_SETTLE = 1.5
+
+
+def _is_local_adapter(info: BluetoothServiceInfoBleak) -> bool:
+    """Return True when the advertisement came from the HA host's built-in
+    Bluetooth adapter (source == "local"), as opposed to a remote proxy.
+
+    ESPHome proxy sources identify themselves by their Bluetooth MAC address;
+    the local hci0 adapter uses the fixed string "local".  No device MACs are
+    hardcoded here.
+    """
+    return (info.source or "").strip().lower() == "local"
+
+
+@callback
+def async_ble_device_for_scale(
+    hass: HomeAssistant, address: str
+) -> BLEDevice | None:
+    """Return the best connectable BLEDevice for *address*, preferring a
+    remote ESPHome proxy over the local adapter.
+
+    When the scale is reachable through at least one proxy, the local adapter's
+    path is ignored, because only the proxy holds the BLE bond for the SBF77.
+    If no proxy path exists the local path is returned as a fallback (edge case:
+    proxy offline) with a warning, so other scales that don't need bonding
+    still work.
+    """
+    # Gather every currently-known connectable path for this address.
+    proxy_device: BLEDevice | None = None
+    local_device: BLEDevice | None = None
+
+    for scanner_device in async_scanner_devices_by_address(
+        hass, address, connectable=True
+    ):
+        # scanner_device.ble_device is the BLEDevice seen by this scanner.
+        # scanner_device.scanner.source identifies the scanner:
+        #   "local"           → the host's built-in Bluetooth adapter (hci0)
+        #   "<MAC address>"   → an ESPHome Bluetooth proxy
+        source = getattr(scanner_device.scanner, "source", None) or ""
+        device = scanner_device.ble_device
+        if device is None:
+            continue
+        if source.strip().lower() == "local":
+            if local_device is None:
+                local_device = device
+        else:
+            if proxy_device is None:
+                proxy_device = device
+
+    if proxy_device is not None:
+        return proxy_device
+    if local_device is not None:
+        _LOGGER.warning(
+            "No ESPHome proxy path found for %s; falling back to local adapter. "
+            "The scale may request a new pairing code if the bond is on a proxy.",
+            address,
+        )
+        return local_device
+    # Last resort: use HA's standard lookup (may be None).
+    return async_ble_device_from_address(hass, address, connectable=True)
 
 
 _LOCKS = "scale_locks"
@@ -94,15 +157,18 @@ async def async_hold_scale(hass: HomeAssistant, address: str) -> AsyncIterator[N
 async def async_wait_for_wake(
     hass: HomeAssistant, address: str, timeout: float = WAKE_TIMEOUT
 ) -> None:
-    """Return at the scale's next advertisement; raise WakeTimeout after `timeout`.
+    """Return at the scale's next advertisement from a proxy; raise WakeTimeout
+    after `timeout`.
 
-    A sleeping scale doesn't advertise, so any advertisement means it is awake.
+    A sleeping scale doesn't advertise, so any proxy advertisement means it is
+    awake.  Advertisements arriving only via the local adapter are ignored so
+    that the scale's bond on the proxy is not disturbed by a local connection.
     """
     woke: asyncio.Future[None] = hass.loop.create_future()
 
     @callback
-    def on_advertisement(_info: BluetoothServiceInfoBleak) -> None:
-        if not woke.done():
+    def on_advertisement(info: BluetoothServiceInfoBleak) -> None:
+        if not woke.done() and not _is_local_adapter(info):
             woke.set_result(None)
 
     @callback
@@ -153,7 +219,7 @@ async def async_open_session(
     and the connect repeated once (#23).
     """
     if device is None:
-        device = async_ble_device_from_address(hass, address, connectable=True)
+        device = async_ble_device_for_scale(hass, address)
     if device is None:
         raise ScaleConnectionError(f"no connectable Bluetooth path to {address}")
     opened = False
