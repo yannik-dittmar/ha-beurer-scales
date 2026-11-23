@@ -8,12 +8,12 @@ from custom_components.beurer_scales.protocol.errors import (
     ConnectionLost,
     TeachingTimeout,
 )
-from custom_components.beurer_scales.protocol.models import BF450
+from custom_components.beurer_scales.protocol.models import BF450, model_by_name
 from custom_components.beurer_scales.protocol.session import ScaleSession, open_session
 from custom_components.beurer_scales.protocol.teaching import Teaching
 
 from . import frames
-from .fake_scale import FakeReading, FakeScale
+from .fake_scale import FakeReading, FakeScale, TAKE_MEASUREMENT_0006
 
 READING = FakeReading.from_capture(frames.READING_SLOT_2)
 TIMEOUT = 0.1
@@ -42,6 +42,18 @@ async def test_waiting_for_a_live_reading_returns_it_once_the_scale_is_done(
         reading = await asyncio.wait_for(waiting, 1)
 
     assert (reading.slot, reading.weight_kg) == (2, 78.4)
+
+
+async def test_sbf77_teaching_requests_a_measurement(scale: FakeScale) -> None:
+    """The SBF77 starts its live measurement with a write to 0006."""
+    model = model_by_name("SBF77")
+    async with open_session(scale.ble_device, model) as session:
+        await session.subscribe_readings()
+        await session.consent(2, 4321)
+        with pytest.raises(TeachingTimeout):
+            await Teaching().run(session, timeout=TIMEOUT)
+
+    assert (TAKE_MEASUREMENT_0006, b"\x00", True) in scale.writes
 
 
 async def test_a_reading_that_finished_before_waiting_is_not_lost(

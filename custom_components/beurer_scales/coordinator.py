@@ -54,6 +54,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .connection import (
+    is_proxy_source,
     session_ended_at,
     session_ended_signal,
     async_hold_scale,
@@ -448,7 +449,13 @@ class ScaleCoordinator:
             or async_scale_held(self.hass, self.address)
         ):
             return
-        self._device = info.device if info.connectable else None
+        # Prefer an ESPHome proxy over any local adapter (hci*, local, usb):
+        # the BLE bond for the SBF77 lives only on the proxy.
+        # NEVER assign self._device from a local adapter.
+        if info.connectable and is_proxy_source(self.hass, info.source):
+            self._device = info.device
+        elif not info.connectable and is_proxy_source(self.hass, info.source):
+            self._device = None
         if pending is None:
             return
         managed = self._managed_slots()
@@ -504,10 +511,11 @@ class ScaleCoordinator:
     def _async_start_sync(self, fresh: Collection[int] = ()) -> None:
         """Sync the slots of the last slot list that are still managed;
         `fresh` were just appended to it."""
+        fresh_slots = tuple(fresh)
         managed = self._managed_slots()
         order = sync_order(
             [s for s in self._managed_pending if s in managed],
-            fresh,
+            fresh_slots,
             self._refused_later,
         )
         if not order:
@@ -515,12 +523,20 @@ class ScaleCoordinator:
         self._syncing = True
         self.entry.async_create_background_task(
             self.hass,
-            self._async_sync([managed[slot] for slot in order], self._device),
+            self._async_sync(
+                [managed[slot] for slot in order],
+                self._device,
+                slot_appended=bool(fresh_slots),
+            ),
             f"{DOMAIN} sync {self.address}",
         )
 
     async def _async_sync(
-        self, subentries: list[ConfigSubentry], device: BLEDevice | None
+        self,
+        subentries: list[ConfigSubentry],
+        device: BLEDevice | None,
+        *,
+        slot_appended: bool = False,
     ) -> None:
         """Sync the first scale user, then drain the others in the same connection.
 
@@ -559,7 +575,7 @@ class ScaleCoordinator:
             await self._async_run_pending_deletions(session, consented=True)
 
         try:
-            await self._async_in_session(sync, device)
+            await self._async_in_session(sync, device, slot_appended=slot_appended)
         except ScaleError as err:
             _LOGGER.warning("Syncing slot %s of %s failed: %r", slot, self.address, err)
             if isinstance(err, PairingUnsupported | PairingFailed):
@@ -570,6 +586,8 @@ class ScaleCoordinator:
         self,
         work: Callable[[ScaleSession], Awaitable[None]],
         device: BLEDevice | None = None,
+        *,
+        slot_appended: bool = False,
     ) -> None:
         """Hold the scale and run `work` in a session; the scale sleeps after it.
 
@@ -578,7 +596,14 @@ class ScaleCoordinator:
         later wake. Raises ScaleError.
         """
         wake = self.wakes.current
-        deadline = wake.falls_asleep_at - WAKE_END_MARGIN if wake else None
+        # A newly appended slot means the weigh-in just finished. It may be a
+        # second step-on during the post-disconnect advertising tail, whose
+        # wake timer started before that weigh-in.
+        deadline = (
+            wake.falls_asleep_at - WAKE_END_MARGIN
+            if wake and not slot_appended
+            else None
+        )
         try:
             if async_scale_held(self.hass, self.address):
                 _LOGGER.debug(

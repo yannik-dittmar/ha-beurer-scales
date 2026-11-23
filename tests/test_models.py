@@ -29,6 +29,7 @@ GATT_MAP = {
     "BF880": (0xFFFF, 0xFFFF, 0xFFF1, 0xFFF2, 0xFFF4),
     "BF915": (0xFFFF, 0xFFFF, 0x0001, 0x0004, 0x0006),
     "BF950": (0xFFFF, 0xFFFF, 0x0001, 0x0004, 0x0006),
+    "SBF77": (0xFFFF, 0xFFFF, 0x0001, 0x0004, 0x0006),
     "BF980": (0xFFFF, 0xFFFF, 0xFFF1, 0xFFF2, 0xFFF4),
     "BF990": (0xFFFF, 0xFFFF, 0xFFF1, 0xFFF2, 0xFFF4),
     "GS435": (0x181D, 0xFFFF, 0x0001, 0xFFF3, 0x0006),
@@ -117,7 +118,7 @@ WIFI_MODELS = {"BF880", "BF980", "BF990"}
 
 
 def test_the_table_holds_the_whole_bf600_family() -> None:
-    """All 17 BF600-family models, and only BF450/BF451 are verified."""
+    """All 17 BF600-family models plus SBF77, and only BF450/BF451 are verified."""
     assert {m.name for m in MODELS} == set(GATT_MAP)
     assert {m.name for m in MODELS if m.verified} == {"BF450", "BF451"}
 

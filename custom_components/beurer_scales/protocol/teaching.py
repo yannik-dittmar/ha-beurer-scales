@@ -36,6 +36,7 @@ class Teaching:
             timeout = TEACHING_TIMEOUT
         try:
             async with asyncio.timeout(timeout):
+                await session.request_live_measurement()
                 self.reading = await session.wait_for_live_reading()
         except TimeoutError as err:
             raise TeachingTimeout("no reading while teaching") from err
