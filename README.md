@@ -15,13 +15,13 @@ The integration supports the BF600 family of Beurer scales.
 | Verified | BF450, BF451 |
 | Untested | BF105, BF1000, BF405, BF500, BF600, BF720, BF722, BF850, BF880, BF915, BF950, BF980, BF990, GS435, SRBF1 |
 
-Home Assistant discovers untested models too, and setup warns you that the model hasn't been tested. Each model only gets the sensors it actually measures (the GS435, for example, only measures weight). Known gaps: the BF990's extra body-composition frames aren't decoded yet, and the firmware workaround for the "108.8 kg" weight error of the BF720, BF722 and BF950 isn't implemented. The BF700/BF710 family isn't supported.
+Home Assistant discovers untested models too, and setup warns you that the model hasn't been tested. Each model only gets the sensors it actually measures (the GS435, for example, only measures weight). Known gaps: the firmware workaround for the "108.8 kg" weight error of the BF720, BF722 and BF950 isn't implemented. The BF700/BF710 family isn't supported.
 
 ## Requirements
 
 - **Home Assistant 2026.10 or newer.** The integration relies on a Bluetooth callback that fires for every advertisement, which arrived in 2026.10.
 - **A Bluetooth path that can pair (bond) with the scale.** The scale drops any connection that isn't bonded.
-  - Recommended: an [ESPHome Bluetooth proxy](https://esphome.io/components/bluetooth_proxy/) on an ESP32 near the scale, with `active: true` (Bluetooth scanning mode **Active** in its entry's options). The scale reports its weigh-ins only in its scan response, which a passively scanning proxy never receives; Home Assistant asks for active scanning when the scale wakes, but a proxy fixed to passive ignores that. ESPHome proxies pair with the scale automatically.
+  - Recommended: an [ESPHome Bluetooth proxy](https://esphome.io/components/bluetooth_proxy/) on an ESP32 near the scale, with `active: true` (Bluetooth scanning mode **Active** in its entry's options). The scale reports its weigh-ins only in its scan response, which a passively scanning proxy never receives; Home Assistant asks for active scanning when the scale wakes, but a proxy fixed to passive ignores that. ESPHome proxies pair with the scale automatically. **BF990:** it refuses to bond with ESPHome's default IO capability; add `esp32_ble:` with `io_capability: keyboard_display` to the proxy's YAML (no passkey is asked for).
   - Home Assistant Container or Core with a host Bluetooth adapter that is pairable also works.
   - **Not supported: Home Assistant OS with only a built-in or USB Bluetooth adapter.** Home Assistant registers no pairing agent there, so the adapter can't bond, and this integration doesn't register its own. Add an ESPHome proxy instead.
   - Shelly devices can't be used as a proxy for this scale: they can't connect to it.
@@ -37,7 +37,7 @@ Home Assistant discovers untested models too, and setup warns you that the model
 
 Step on the scale once. Home Assistant discovers it and offers to set it up; confirm it. You can also add it under **Settings → Devices & services → Add integration → Beurer Scales**, which lists the Beurer scales Home Assistant has seen nearby.
 
-Setting up the scale doesn't connect to it, so the scale doesn't need to be awake. The scale gets its own device with a **Battery** sensor and a **Last sync** sensor and a **Pending deletions** sensor (both diagnostic). Then add scale users.
+Setting up the scale doesn't connect to it, so the scale doesn't need to be awake. The scale gets its own device with a **Battery** sensor, an **Awake** binary sensor, and a **Last sync** sensor and a **Pending deletions** sensor (both diagnostic). **Awake** turns on as soon as someone taps or steps on the scale, before the weigh-in is final and before anyone is recognised, and off once the scale has been silent for about 10 s; use it to start a routine when someone steps on. Then add scale users.
 
 ## Scale users
 

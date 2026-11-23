@@ -29,7 +29,7 @@ from .repairs import (
 from .garmin_push import ISSUE_GARMIN_AUTH, garmin_store
 from .pending_deletions import PendingDeletion, async_remove_pending_deletions
 
-PLATFORMS = [Platform.SENSOR]
+PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: BeurerConfigEntry) -> bool:

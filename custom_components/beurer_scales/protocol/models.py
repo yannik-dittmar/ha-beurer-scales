@@ -43,6 +43,9 @@ CUSTOM2_UUID = uuid16(0xFFF6)
 SEGMENT_BODY_UUID = uuid16(0x0008)
 SEGMENT_FAT_UUID = uuid16(0x0009)
 SEGMENT_MUSCLE_UUID = uuid16(0x000A)
+# BF990 segmental analysis and measurement status frames (§5.4, §9.7).
+FULL_BODY_UUID = uuid16(0xFFF7)
+MEASUREMENT_STATUS_UUID = uuid16(0xFFF8)
 
 
 class FrameKind(StrEnum):
@@ -59,6 +62,10 @@ class FrameKind(StrEnum):
     SEGMENT_BODY = "segment_body"
     SEGMENT_FAT = "segment_fat"
     SEGMENT_MUSCLE = "segment_muscle"
+    # BF990 (§5.4, §9.7).
+    HEART_RATE_EXTENDED = "heart_rate_extended"
+    FULL_BODY = "full_body"
+    MEASUREMENT_STATUS = "measurement_status"
 
 
 # The metrics each kind of frame carries; a model measures those of its frames.
@@ -110,6 +117,32 @@ FRAME_METRICS: dict[FrameKind, tuple[Metric, ...]] = {
         Metric.RIGHT_LEG_MUSCLE,
         Metric.TORSO_MUSCLE,
     ),
+    FrameKind.HEART_RATE_EXTENDED: (
+        Metric.HEART_RATE,
+        Metric.VISCERAL_FAT,
+        Metric.METABOLIC_AGE,
+        Metric.BMR,
+        Metric.AMR,
+        Metric.BONE_MASS,
+        Metric.LEAN_BODY_MASS,
+        Metric.PROTEIN_MASS,
+        Metric.TOTAL_MUSCLE_MASS,
+        Metric.BODY_WATER,
+    ),
+    FrameKind.FULL_BODY: (
+        Metric.LEFT_LEG_FAT,
+        Metric.RIGHT_LEG_FAT,
+        Metric.LEFT_ARM_FAT,
+        Metric.RIGHT_ARM_FAT,
+        Metric.TORSO_FAT,
+        Metric.LEFT_LEG_MUSCLE,
+        Metric.RIGHT_LEG_MUSCLE,
+        Metric.LEFT_ARM_MUSCLE,
+        Metric.RIGHT_ARM_MUSCLE,
+        Metric.TORSO_MUSCLE,
+    ),
+    # Only says whether the scale guessed the slot (policy).
+    FrameKind.MEASUREMENT_STATUS: (),
 }
 
 ReadingFrames = tuple[tuple[str, FrameKind], ...]
@@ -156,6 +189,11 @@ class ScaleModel:
     # `[cm, 0]`, and its own Database Change Increment value.
     one_byte_height: bool = False
     database_change_increment: bytes = DATABASE_CHANGE_INCREMENT
+    # How long into a wake HA waits before syncing slots that were pending
+    # before it (ADR 0008). It must end well before the scale stops
+    # advertising: the BF450 advertises for 25–47 s, the BF990 only ~10 s
+    # after a tap and ~15 s after a weigh-in (§9.7).
+    weigh_in_final_delay: float = 25.0
 
     @property
     def reading_uuids(self) -> tuple[str, ...]:
@@ -254,8 +292,22 @@ MODELS: tuple[ScaleModel, ...] = (
     _model("BF915", _GATT_0001),
     _model("BF950", _GATT_0001),
     _model("BF980", _GATT_FFF1, _HEART_RATE, _WIFI),
-    # Its 20-byte FFF5/FFF7/FFF8 frames aren't decoded yet (§5.4).
-    _model("BF990", _GATT_FFF1, _WIFI),
+    # Frames and user handling verified over BlueZ (§9.7). The app resets it
+    # through FFCF/FFC2, not FFF7 (FFF7 is its segmental frame); unverified, so
+    # no factory reset is offered.
+    _model(
+        "BF990",
+        _GATT_FFF1,
+        _WIFI,
+        factory_reset_uuid=None,
+        weigh_in_final_delay=7.0,
+        reading_frames=(
+            *_STANDARD_FRAMES,
+            (CUSTOM1_UUID, FrameKind.HEART_RATE_EXTENDED),
+            (FULL_BODY_UUID, FrameKind.FULL_BODY),
+            (MEASUREMENT_STATUS_UUID, FrameKind.MEASUREMENT_STATUS),
+        ),
+    ),
     # Weight only (marker `ji`).
     _model(
         "GS435",

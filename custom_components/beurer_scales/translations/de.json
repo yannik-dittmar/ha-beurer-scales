@@ -1,0 +1,432 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "bluetooth_confirm": {
+        "description": "Möchtest du {name} einrichten? Beim Einrichten verbindet sich Home Assistant noch nicht mit der Waage; die Waagennutzer fügst du danach hinzu."
+      },
+      "untested_model": {
+        "title": "Ungetestetes Waagenmodell",
+        "description": "Die {name} wurde mit dieser Integration noch nicht getestet. Sie gehört zur selben Familie wie die getestete BF450 und sollte funktionieren, einzelne Werte oder Funktionen aber vielleicht nicht. Bitte melde im Issue-Tracker des Projekts, wie sie funktioniert. Beim Einrichten verbindet sich Home Assistant noch nicht mit der Waage; die Waagennutzer fügst du danach hinzu."
+      },
+      "user": {
+        "description": "Wähle eine Beurer-Waage, die Home Assistant in der Nähe gesehen hat. Fehlt sie in der Liste, stell dich kurz auf die Waage, um sie zu wecken.",
+        "data": {
+          "address": "Waage"
+        },
+        "data_description": {
+          "address": "Waagen, die Home Assistant kürzlich gehört hat und die noch nicht eingerichtet sind, mit ihrer Bluetooth-Adresse."
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Diese Waage ist bereits eingerichtet.",
+      "already_in_progress": "Diese Waage wird bereits eingerichtet.",
+      "no_devices_found": "In der Nähe wurde keine noch nicht eingerichtete Beurer-Waage gesehen. Stell dich kurz auf die Waage, um sie zu wecken, und versuche es dann erneut.",
+      "not_supported": "Dieses Waagenmodell wird nicht unterstützt."
+    }
+  },
+  "config_subentries": {
+    "scale_user": {
+      "initiate_flow": {
+        "user": "Waagennutzer hinzufügen"
+      },
+      "entry_type": "Waagennutzer",
+      "step": {
+        "user": {
+          "title": "Waagennutzer hinzufügen",
+          "menu_options": {
+            "create": "Neuen Waagennutzer anlegen",
+            "adopt": "Vorhandenen Platz übernehmen"
+          }
+        },
+        "create": {
+          "title": "Neuen Waagennutzer anlegen",
+          "description": "Home Assistant legt den Waagennutzer auf der Waage an und wählt seinen Zugangscode selbst. Die Waage berechnet die Körperzusammensetzung anhand des Profils.",
+          "data": {
+            "person": "Person",
+            "name": "Name",
+            "birth_date": "Geburtsdatum",
+            "height_cm": "Größe",
+            "gender": "Geschlecht",
+            "activity_level": "Aktivitätslevel"
+          },
+          "data_description": {
+            "person": "Optional. Verknüpft den Waagennutzer mit einer Person in Home Assistant.",
+            "name": "Leer lassen, um den Namen der Person zu verwenden.",
+            "birth_date": "Die Waage unterstützt ein Alter von 10 bis 100 Jahren.",
+            "height_cm": "In Zentimetern, von 100 bis 220."
+          }
+        },
+        "adopt": {
+          "title": "Vorhandenen Platz übernehmen",
+          "description": "Nutze einen Platz, dessen Zugangscode du kennst, etwa einen, den Home Assistant vor einer Neuinstallation angelegt hat. Übernimm keinen Waagennutzer, den auch die Beurer-App verwendet: Home Assistant muss sein einziger Client sein.",
+          "data": {
+            "person": "Person",
+            "name": "Name",
+            "slot": "Platz",
+            "consent_code": "Zugangscode"
+          },
+          "data_description": {
+            "person": "Optional. Verknüpft den Waagennutzer mit einer Person in Home Assistant.",
+            "name": "Leer lassen, um den Namen der Person zu verwenden.",
+            "slot": "Die Platznummer auf der Waage.",
+            "consent_code": "Der 4-stellige Code, der beim Anlegen dieses Waagennutzers gewählt wurde."
+          }
+        },
+        "reconfigure": {
+          "title": "Waagennutzer ändern",
+          "description": "Zum Umbenennen oder Ändern der Person braucht es die Waage nicht. Zum Ändern des Profils schon: Home Assistant bittet dich dann, die Waage zu wecken, und schreibt das neue Profil auf sie.",
+          "data": {
+            "person": "Person",
+            "name": "Name",
+            "birth_date": "Geburtsdatum",
+            "height_cm": "Größe",
+            "gender": "Geschlecht",
+            "activity_level": "Aktivitätslevel"
+          },
+          "data_description": {
+            "person": "Optional. Verknüpft den Waagennutzer mit einer Person in Home Assistant.",
+            "name": "Leer lassen, um den Namen der Person zu verwenden.",
+            "birth_date": "Die Waage unterstützt ein Alter von 10 bis 100 Jahren.",
+            "height_cm": "In Zentimetern, von 100 bis 220."
+          }
+        },
+        "repair_adopt": {
+          "title": "Zugangscode erneut eingeben",
+          "description": "Die Waage hat den Zugangscode von {name} (Platz {slot}) abgelehnt. Gib den Code ein, mit dem dieser Waagennutzer angelegt wurde. Home Assistant prüft ihn, wenn die Waage das nächste Mal aufwacht.",
+          "data": {
+            "consent_code": "Zugangscode"
+          },
+          "data_description": {
+            "consent_code": "Der 4-stellige Code, der beim Anlegen dieses Waagennutzers gewählt wurde."
+          }
+        },
+        "repair_create": {
+          "title": "Waagennutzer neu anlegen",
+          "description": "Home Assistant legt {name} mit dem gespeicherten Profil und einem neuen Zugangscode erneut auf der Waage an. Die Waage kann dafür einen anderen Platz wählen; die Sensoren bleiben dieselben. {name} stellt sich danach einmal auf die Waage und bleibt stehen, bis das Display dunkel wird; mit dieser Messung lernt die Waage, wer es ist."
+        }
+      },
+      "progress": {
+        "wake": "Stell dich auf die Waage, um sie zu wecken. Home Assistant verbindet sich dann, prüft den Zugangscode und liest das Profil von der Waage.",
+        "create_wake": "Schritt 1 von 3, Verbinden: Der neue Waagennutzer stellt sich jetzt auf die Waage und bleibt stehen, bis das Display dunkel wird. Dieses eine Draufstellen weckt die Waage und bringt ihr bei, wer es ist. Nicht zu früh absteigen.",
+        "create_user": "Schritt 2 von 3, Waagennutzer anlegen: Home Assistant legt den Waagennutzer auf der Waage an und schreibt sein Profil. Bleib auf der Waage stehen.",
+        "create_measure": "Schritt 3 von 3, Messen: Die Waage misst. Bleib stehen, bis sie alle Ergebnisse angezeigt hat und das Display dunkel wird (das Bluetooth-Symbol kann leuchten bleiben). Warte darauf, bevor sich jemand anderes auf die Waage stellt.",
+        "reconfigure": "Stell dich auf die Waage, um sie zu wecken. Home Assistant verbindet sich dann und schreibt das neue Profil auf die Waage."
+      },
+      "create_entry": {
+        "measured": "Die Waage hat {weight} gemessen, und der Waagennutzer ist eingerichtet. Warte, bis das Display dunkel ist, bevor sich die nächste Person auf die Waage stellt."
+      },
+      "error": {
+        "name_required": "Wähle eine Person oder gib einen Namen ein.",
+        "name_in_use": "Ein anderer Waagennutzer dieser Waage hat bereits diesen Namen.",
+        "slot_in_use": "Dieser Platz gehört bereits einem Waagennutzer dieser Waage.",
+        "slot_not_found": "Auf diesem Platz der Waage gibt es keinen Waagennutzer.",
+        "invalid_consent_code": "Die Waage hat diesen Zugangscode abgelehnt.",
+        "invalid_birth_date": "Gib ein Geburtsdatum für ein Alter zwischen 10 und 100 Jahren ein."
+      },
+      "abort": {
+        "no_free_slot": "Alle Plätze auf der Waage sind belegt. Entferne zuerst einen Waagennutzer und versuche es dann erneut.",
+        "wake_timeout": "Die Waage ist nicht innerhalb von 3 Minuten aufgewacht. Starte erneut und stell dich auf die Waage.",
+        "pairing_unsupported": "Der Bluetooth-Adapter oder Proxy, der die Waage erreicht hat, kann sich nicht mit ihr koppeln. Verwende einen ESPHome-Bluetooth-Proxy oder mach den Host-Adapter koppelbar. Wurde die Waage auf Werkseinstellungen zurückgesetzt, hält der Weg vielleicht noch die alte Kopplung: Home Assistant kann sie nur auf einem ESPHome-Proxy entfernen.",
+        "cannot_connect": "Home Assistant konnte nicht mit der Waage sprechen. Stell sicher, dass sie in Reichweite ist, und versuche es erneut.",
+        "teaching_timeout": "Die Waage hat nicht rechtzeitig eine Messung geliefert. Der neue Waagennutzer wurde wieder von der Waage entfernt; starte erneut, um ihn anzulegen.",
+        "teaching_connection_lost": "Die Verbindung zur Waage ist vor ihrer Messung abgebrochen. Home Assistant entfernt den neuen Waagennutzer beim nächsten Aufwachen von der Waage. Stell den Bluetooth-Proxy näher an die Waage und starte erneut.",
+        "consent_rejected": "Die Waage hat den Zugangscode dieses Waagennutzers abgelehnt, daher konnte das Profil nicht geschrieben werden. Es wurde nichts geändert.",
+        "reconfigure_successful": "Der Waagennutzer wurde aktualisiert.",
+        "scale_user_repaired": "Der Waagennutzer funktioniert wieder.",
+        "scale_user_recreated": "Die Waage hat {weight} gemessen, und der Waagennutzer funktioniert wieder. Warte, bis das Display dunkel ist, bevor sich die nächste Person auf die Waage stellt.",
+        "slot_now_empty": "Auf diesem Platz der Waage gibt es keinen Waagennutzer mehr. Öffne die Reparatur erneut und wähle, den Waagennutzer neu anzulegen.",
+        "profile_unknown": "Home Assistant kennt das vollständige Profil dieses Waagennutzers nicht und kann ihn deshalb nicht neu anlegen. Entferne den Waagennutzer und füge ihn neu hinzu.",
+        "slot_held_by_other_scale_user": "Die Waage hat den neuen Waagennutzer auf einen Platz gelegt, den in Home Assistant noch ein anderer Waagennutzer dieser Waage belegt; Home Assistant hat ihn daher wieder entfernt. Repariere oder entferne zuerst diesen Waagennutzer."
+      }
+    },
+    "garmin_connect": {
+      "initiate_flow": {
+        "user": "Garmin-Connect-Verknüpfung hinzufügen"
+      },
+      "entry_type": "Garmin-Connect-Verknüpfung",
+      "step": {
+        "user": {
+          "title": "Messungen an Garmin Connect senden",
+          "description": "Home Assistant sendet jede neue Messung des Waagennutzers an das Garmin-Connect-Konto, mit dem du dich anmeldest: das Gewicht und die Werte der Körperzusammensetzung, die Garmin unterstützt.\n\nHome Assistant verwendet das Passwort einmal zum Anmelden und speichert es nicht. Es behält nur die Anmelde-Tokens, die Garmin zurückgibt. Verwende das Konto der Person, die sich auf die Waage stellt.",
+          "data": {
+            "scale_user": "Waagennutzer",
+            "email": "Garmin-E-Mail",
+            "password": "Garmin-Passwort"
+          },
+          "data_description": {
+            "scale_user": "Der Waagennutzer, dessen Messungen gesendet werden. Jeder Waagennutzer hat höchstens eine Verknüpfung."
+          }
+        },
+        "reconfigure": {
+          "title": "Erneut bei Garmin Connect anmelden",
+          "description": "Melde dich erneut an, damit Home Assistant neue Tokens bekommt, etwa nachdem Garmin die alten abgelehnt hat. Messungen, die in der Zwischenzeit nicht gesendet werden konnten, werden danach gesendet.",
+          "data": {
+            "email": "Garmin-E-Mail",
+            "password": "Garmin-Passwort"
+          }
+        },
+        "mfa": {
+          "title": "Garmin-Code eingeben",
+          "description": "Garmin hat einen Bestätigungscode an deine E-Mail-Adresse oder dein Telefon gesendet.",
+          "data": {
+            "mfa_code": "Bestätigungscode"
+          }
+        }
+      },
+      "progress": {
+        "login": "Anmeldung bei Garmin Connect. Das dauert bis zu einer Minute: Garmins Anmeldung ist absichtlich langsam.",
+        "verify": "Der Bestätigungscode wird bei Garmin Connect geprüft."
+      },
+      "error": {
+        "invalid_auth": "Garmin hat die E-Mail-Adresse oder das Passwort abgelehnt.",
+        "invalid_mfa": "Garmin hat den Bestätigungscode abgelehnt.",
+        "rate_limited": "Garmin bremst Anmeldungen gerade. Warte ein paar Minuten und versuche es dann erneut.",
+        "cannot_connect": "Home Assistant konnte sich nicht bei Garmin Connect anmelden. Versuche es später erneut.",
+        "unknown": "Die Anmeldung ist unerwartet fehlgeschlagen. Details stehen im Log."
+      },
+      "abort": {
+        "no_scale_user": "Jeder Waagennutzer hat bereits eine Garmin-Connect-Verknüpfung, oder es gibt noch keinen Waagennutzer.",
+        "reconfigure_successful": "Erneut bei Garmin Connect angemeldet."
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "awake": {
+        "name": "Aktiv"
+      }
+    },
+    "sensor": {
+      "last_sync": {
+        "name": "Letzte Synchronisation"
+      },
+      "last_reading": {
+        "name": "Letzte Messung"
+      },
+      "bmi": {
+        "name": "BMI"
+      },
+      "body_fat": {
+        "name": "Körperfett"
+      },
+      "body_water": {
+        "name": "Körperwasser"
+      },
+      "muscle": {
+        "name": "Muskelanteil"
+      },
+      "bone_mass": {
+        "name": "Knochenmasse"
+      },
+      "bmr": {
+        "name": "Grundumsatz"
+      },
+      "amr": {
+        "name": "Aktivitätsumsatz"
+      },
+      "visceral_fat": {
+        "name": "Viszeralfett"
+      },
+      "metabolic_age": {
+        "name": "Stoffwechselalter"
+      },
+      "lean_body_mass": {
+        "name": "Fettfreie Masse"
+      },
+      "protein_mass": {
+        "name": "Proteinmasse"
+      },
+      "total_muscle_mass": {
+        "name": "Gesamtmuskelmasse"
+      },
+      "soft_lean_mass": {
+        "name": "Weiche Magermasse"
+      },
+      "subcutaneous_fat": {
+        "name": "Unterhautfett"
+      },
+      "ideal_weight": {
+        "name": "Idealgewicht"
+      },
+      "impedance": {
+        "name": "Impedanz"
+      },
+      "heart_rate": {
+        "name": "Puls"
+      },
+      "upper_body_fat": {
+        "name": "Fett Oberkörper"
+      },
+      "lower_body_fat": {
+        "name": "Fett Unterkörper"
+      },
+      "upper_body_muscle": {
+        "name": "Muskel Oberkörper"
+      },
+      "lower_body_muscle": {
+        "name": "Muskel Unterkörper"
+      },
+      "left_arm_fat": {
+        "name": "Fett linker Arm"
+      },
+      "right_arm_fat": {
+        "name": "Fett rechter Arm"
+      },
+      "left_leg_fat": {
+        "name": "Fett linkes Bein"
+      },
+      "right_leg_fat": {
+        "name": "Fett rechtes Bein"
+      },
+      "torso_fat": {
+        "name": "Fett Rumpf"
+      },
+      "left_arm_muscle": {
+        "name": "Muskel linker Arm"
+      },
+      "right_arm_muscle": {
+        "name": "Muskel rechter Arm"
+      },
+      "left_leg_muscle": {
+        "name": "Muskel linkes Bein"
+      },
+      "right_leg_muscle": {
+        "name": "Muskel rechtes Bein"
+      },
+      "torso_muscle": {
+        "name": "Muskel Rumpf"
+      },
+      "pending_deletions": {
+        "name": "Ausstehende Löschungen"
+      }
+    }
+  },
+  "selector": {
+    "gender": {
+      "options": {
+        "male": "Männlich",
+        "female": "Weiblich"
+      }
+    },
+    "activity_level": {
+      "options": {
+        "1": "1 - Keine",
+        "2": "2 - Gering",
+        "3": "3 - Mittel",
+        "4": "4 - Hoch",
+        "5": "5 - Sehr hoch"
+      }
+    }
+  },
+  "issues": {
+    "pairing_impossible": {
+      "title": "{name} kann über diesen Bluetooth-Weg nicht koppeln",
+      "description": "Home Assistant hat die Waage {name} erreicht, aber der verwendete Bluetooth-Adapter oder Proxy konnte sich nicht mit ihr koppeln. Die Waage bleibt nur gekoppelt verbunden, daher werden keine Messungen synchronisiert.\n\nSo behebst du es:\n- Stell einen ESPHome-Bluetooth-Proxy auf einem ESP32 in die Nähe der Waage. ESPHome-Proxys koppeln sich automatisch mit der Waage (BF990: im Proxy `esp32_ble: io_capability: keyboard_display` setzen).\n- Nutzt Home Assistant einen eigenen Bluetooth-Adapter, mach den Host-Adapter koppelbar. Ein lokaler Adapter unter Home Assistant OS kann meist nicht koppeln.\n\nWurde die Waage auf Werkseinstellungen zurückgesetzt, hält der Adapter oder Proxy vielleicht noch die alte Kopplung. Auf einem ESPHome-Proxy entfernt Home Assistant sie selbst. Bei einem lokalen Adapter entferne die Waage in den Bluetooth-Einstellungen des Hosts (mit `bluetoothctl remove` und der Adresse der Waage) und stell dich erneut auf die Waage.\n\nDiese Meldung verschwindet nach der nächsten erfolgreichen Synchronisation."
+    },
+    "wrong_consent_code": {
+      "title": "{scale}: Die Waage lehnt den Zugangscode von {name} ab",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "{name} reparieren",
+            "description": "Die Waage hat auf diesem Platz noch einen Waagennutzer, lehnt aber den von Home Assistant gespeicherten Zugangscode ab, etwa weil ein anderer Client dort einen neuen Waagennutzer angelegt hat. Home Assistant synchronisiert {name} erst wieder, wenn das behoben ist.",
+            "menu_options": {
+              "adopt": "Zugangscode erneut eingeben",
+              "create": "Waagennutzer neu anlegen",
+              "remove": "Waagennutzer aus Home Assistant entfernen"
+            }
+          }
+        },
+        "abort": {
+          "continue_in_scale_user_flow": "Weiter im Dialog des Waagennutzers.",
+          "scale_user_removed": "Dieser Waagennutzer existiert nicht mehr."
+        }
+      }
+    },
+    "scale_user_deleted": {
+      "title": "{scale}: {name} wurde auf der Waage gelöscht",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "{name} reparieren",
+            "description": "Die Waage hat diesen Waagennutzer nicht mehr, etwa weil er in der Beurer-App gelöscht wurde. Home Assistant synchronisiert {name} erst wieder, wenn das behoben ist.",
+            "menu_options": {
+              "create": "Waagennutzer neu anlegen",
+              "remove": "Waagennutzer aus Home Assistant entfernen"
+            }
+          }
+        },
+        "abort": {
+          "continue_in_scale_user_flow": "Weiter im Dialog des Waagennutzers.",
+          "scale_user_removed": "Dieser Waagennutzer existiert nicht mehr."
+        }
+      }
+    },
+    "factory_reset": {
+      "title": "{scale} wurde auf Werkseinstellungen zurückgesetzt",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "{name} reparieren",
+            "description": "Die Waage listet keine Waagennutzer mehr auf, sie wurde also zurückgesetzt und {name} ist weg. Home Assistant hat die Bluetooth-Kopplung mit der Waage erneuert. Lege den Waagennutzer neu an oder entferne ihn.",
+            "menu_options": {
+              "create": "Waagennutzer neu anlegen",
+              "remove": "Waagennutzer aus Home Assistant entfernen"
+            }
+          }
+        },
+        "abort": {
+          "continue_in_scale_user_flow": "Weiter im Dialog des Waagennutzers.",
+          "scale_user_removed": "Dieser Waagennutzer existiert nicht mehr."
+        }
+      }
+    },
+    "deletion_failing": {
+      "title": "{name}: Entfernte Waagennutzer sind auf der Waage noch nicht gelöscht",
+      "description": "Die Waagennutzer auf Platz {slots} wurden in Home Assistant entfernt, aber {name} hat sie noch: Home Assistant konnte sie bei den letzten {wakes} Weckvorgängen der Waage nicht löschen. Sie belegen weiter Plätze.\n\nWahrscheinliche Ursachen: Home Assistant verbindet sich nie mit der Waage, oder die Verbindung schlägt fehl:\n- Home Assistant scannt passiv. Die Advertisements der Waage kommen nicht so an, dass es reagieren kann.\n- Der Bluetooth-Proxy ist zu weit von der Waage entfernt oder seine Verbindung ist schwach.\n- Der Proxy oder Adapter hält noch eine alte Kopplung mit der Waage, etwa nach einem Zurücksetzen.\n\nPrüfe den Sensor **Ausstehende Löschungen** am Gerät der Waage. Stell den Proxy näher an die Waage und stell dich erneut auf die Waage. Diese Meldung verschwindet, sobald die Löschungen gelaufen sind."
+    },
+    "no_scan_response": {
+      "title": "{name}: Home Assistant sieht keine ausstehenden Messungen",
+      "description": "Bei den letzten {wakes} Weckvorgängen von {name} hat Home Assistant nie ihre Scan-Antwort empfangen. Nur dort listet die Waage ihre ausstehenden Messungen, daher kann Home Assistant nicht erkennen, wer sich daraufgestellt hat, und synchronisiert nichts.\n\nDer Bluetooth-Weg, der die Waage hört, scannt passiv. Home Assistant fordert beim Aufwachen der Waage aktives Scannen an, aber nicht jeder Weg folgt dem:\n- ESPHome-Bluetooth-Proxy: Öffne den Eintrag des Proxys in Home Assistant, geh auf **Konfigurieren** und stell den **Bluetooth-Scanmodus** auf **Aktiv**.\n- Eigener Adapter von Home Assistant: Prüfe, ob er aktives Scannen unterstützt.\n- Der Proxy ist vielleicht zu weit von der Waage entfernt.\n\nDiese Meldung verschwindet, sobald eine Scan-Antwort ankommt."
+    },
+    "garmin_auth": {
+      "title": "{name}: Garmin Connect hat die Anmeldung abgelehnt",
+      "description": "Garmin Connect akzeptiert die Anmeldung, die Home Assistant für {name} gespeichert hat, nicht mehr, etwa weil sich das Passwort geändert hat oder die Anmeldung abgelaufen ist. Neue Messungen werden aufbewahrt und gehen nicht verloren, aber bis zur erneuten Anmeldung wird nichts gesendet.\n\nÖffne die Integration, wähle die Garmin-Connect-Verknüpfung von {name}, dann **Neu konfigurieren**, und melde dich erneut an. Danach verschwindet diese Meldung."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Waage konfigurieren",
+        "menu_options": {
+          "options": "Waagen-Optionen",
+          "factory_reset": "Waage auf Werkseinstellungen zurücksetzen"
+        }
+      },
+      "options": {
+        "title": "Waagen-Optionen",
+        "data": {
+          "notify_unrecognised": "Über nicht erkannte Messungen benachrichtigen"
+        },
+        "data_description": {
+          "notify_unrecognised": "Sendet eine Benachrichtigung, wenn sich jemand auf die Waage stellt, den sie keinem ihrer Waagennutzer zuordnet, damit diese Person hinzugefügt werden kann."
+        }
+      },
+      "factory_reset": {
+        "title": "Waage auf Werkseinstellungen zurücksetzen",
+        "description": "Das löscht alle Waagennutzer auf der Waage, auch die der Beurer-App oder anderer Clients. Es lässt sich nicht rückgängig machen. Home Assistant entfernt auch seine eigenen Waagennutzer und die alte Bluetooth-Kopplung der Waage, damit sich die nächste Verbindung neu koppelt. Ihre Messungen bleiben im Verlauf von Home Assistant.\n\nAbsenden, um fortzufahren; Home Assistant bittet dich dann, dich auf die Waage zu stellen."
+      }
+    },
+    "progress": {
+      "factory_reset_wake": "Stell dich auf die Waage, um sie zu wecken. Home Assistant verbindet sich dann und setzt sie zurück. Bleib auf der Waage stehen, bis das Display dunkel wird."
+    },
+    "abort": {
+      "factory_reset_done": "Die Waage wurde zurückgesetzt, ihre Waagennutzer sind weg. Wähle auf der Seite der Waage „Waagennutzer hinzufügen“, um den ersten wieder anzulegen.",
+      "wake_timeout": "Die Waage ist nicht innerhalb von 3 Minuten aufgewacht. Es wurde nichts geändert. Starte erneut und stell dich auf die Waage.",
+      "pairing_unsupported": "Der Bluetooth-Adapter oder Proxy, der die Waage erreicht hat, kann sich nicht mit ihr koppeln, daher wurde nichts geändert. Verwende einen ESPHome-Bluetooth-Proxy oder mach den Host-Adapter koppelbar. Wurde die Waage schon einmal zurückgesetzt, hält der Weg vielleicht noch die alte Kopplung: Home Assistant kann sie nur auf einem ESPHome-Proxy entfernen.",
+      "cannot_connect": "Home Assistant konnte die Waage nicht zurücksetzen. Stell sicher, dass sie in Reichweite ist, und versuche es erneut. Hat das Display ein Zurücksetzen angezeigt, stell dich erneut auf die Waage und füge einen Waagennutzer hinzu."
+    }
+  }
+}

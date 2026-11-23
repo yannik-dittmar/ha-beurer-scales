@@ -14,8 +14,8 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 
 from .frames import FrameError
-from .metrics import decode_custom1_frame
-from .models import CUSTOM1_UUID, FrameKind, ScaleModel
+from .metrics import decode_custom1_frame, decode_measurement_status_frame
+from .models import CUSTOM1_UUID, MEASUREMENT_STATUS_UUID, FrameKind, ScaleModel
 from .readings import Reading
 
 # Readings older than this, measured back from the sync start, are backlog.
@@ -51,20 +51,24 @@ class PolicyResult:
 
 
 def guessed(reading: Reading, model: ScaleModel) -> bool:
-    """Whether the scale only guessed the slot (custom1 byte 4 != 0, §9.4).
+    """Whether the scale only guessed the slot (§9.4, §9.7).
 
-    Only models whose FFF5 frame is custom1 flag a guess; FFF5 is a heart-rate
-    frame on others (§5.4). A reading without a custom1 frame, or with a
-    malformed one, counts as not guessed.
+    The BF450/BF451 flag a guess in custom1 byte 4, the BF990 in its FFF8
+    measurement status frame; FFF5 is a heart-rate frame on other models
+    (§5.4). A reading without the flagging frame, or with a malformed one,
+    counts as not guessed.
     """
-    if (CUSTOM1_UUID, FrameKind.CUSTOM1) not in model.reading_frames:
-        return False
-    if (frame := reading.frames.get(CUSTOM1_UUID)) is None:
-        return False
     try:
-        return decode_custom1_frame(frame).guessed
+        if (CUSTOM1_UUID, FrameKind.CUSTOM1) in model.reading_frames:
+            if (frame := reading.frames.get(CUSTOM1_UUID)) is not None:
+                return decode_custom1_frame(frame).guessed
+        status = (MEASUREMENT_STATUS_UUID, FrameKind.MEASUREMENT_STATUS)
+        if status in model.reading_frames:
+            if (frame := reading.frames.get(MEASUREMENT_STATUS_UUID)) is not None:
+                return decode_measurement_status_frame(frame).guessed
     except FrameError:
         return False
+    return False
 
 
 def classify(

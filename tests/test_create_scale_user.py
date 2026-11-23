@@ -287,33 +287,38 @@ async def test_person_or_name_is_required(
 
 
 def years_ago(years: int, days: int = 0) -> str:
-    """The ISO date `years` years (and `days` days) before today."""
+    """The ISO date `years` years (and `days` days) before today.
+
+    Call it inside the test: HA's test time zone is only set then, and near
+    midnight UTC "today" differs between the two.
+    """
     today = dt_util.now().date()
     return (today.replace(year=today.year - years) - timedelta(days=days)).isoformat()
 
 
 @pytest.mark.parametrize(
-    ("birth_date", "error"),
+    ("years", "days", "error"),
     [
-        (years_ago(-1), "invalid_birth_date"),  # in the future
-        (years_ago(10, days=-1), "invalid_birth_date"),  # not yet 10
-        (years_ago(10), None),
-        (years_ago(100), None),
-        (years_ago(101), "invalid_birth_date"),  # older than 100
+        (-1, 0, "invalid_birth_date"),  # in the future
+        (10, -1, "invalid_birth_date"),  # not yet 10
+        (10, 0, None),
+        (100, 0, None),
+        (101, 0, "invalid_birth_date"),  # older than 100
     ],
 )
 async def test_birth_date_must_give_an_age_of_10_to_100(
     hass: HomeAssistant,
     loaded_scale: MockConfigEntry,
     fake_scale: FakeScale,
-    birth_date: str,
+    years: int,
+    days: int,
     error: str | None,
 ) -> None:
     """The scale computes body composition for ages 10 to 100 only."""
     result = await start_create(hass, loaded_scale)
 
     result = await hass.config_entries.subentries.async_configure(
-        result["flow_id"], {**CREATE_INPUT, "birth_date": birth_date}
+        result["flow_id"], {**CREATE_INPUT, "birth_date": years_ago(years, days)}
     )
 
     if error is None:

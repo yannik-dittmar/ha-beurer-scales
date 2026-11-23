@@ -43,7 +43,13 @@ _WIFI_USER_LIST_ENTRY_LENGTH = 13
 
 
 def decode_user_list_frame(frame: bytes) -> UserListEntry | UserListEnd:
-    """Decode one notification of the user-list characteristic (BF450: FFF1)."""
+    """Decode one notification of the user-list characteristic (BF450: FFF1).
+
+    The BF450 ends the list with one byte; the BF990 pads that byte with `ff`
+    to 20 bytes (§9.7).
+    """
+    if len(frame) > 1 and frame[1:] == b"\xff" * (len(frame) - 1):
+        frame = frame[:1]
     if len(frame) == 1:
         try:
             return UserListEnd(frame[0])
@@ -189,6 +195,6 @@ def decode_weight_frame(frame: bytes) -> WeightFrame:
         timestamp=timestamp,
         slot=frame[10],
         bmi=round(int.from_bytes(frame[11:13], "little") * 0.1, 1),
-        # Raw cm on the BF450 (§9.3).
+        # Raw cm on the BF450 (§9.3), but mm on the BF990 (§9.7); unused.
         height_cm=int.from_bytes(frame[13:15], "little"),
     )

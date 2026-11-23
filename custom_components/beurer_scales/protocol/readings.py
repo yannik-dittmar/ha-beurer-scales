@@ -16,6 +16,8 @@ from .metrics import (
     decode_body_composition_frame,
     decode_custom1_frame,
     decode_custom2_frame,
+    decode_full_body_frame,
+    decode_heart_rate_extended_frame,
     decode_heart_rate_frame,
     decode_segment_body_frame,
     decode_segment_fat_frame,
@@ -158,6 +160,13 @@ def _decode_frame(
             return decode_segment_fat_frame(frame)
         case FrameKind.SEGMENT_MUSCLE:
             return decode_segment_muscle_frame(frame)
+        case FrameKind.HEART_RATE_EXTENDED:
+            return decode_heart_rate_extended_frame(frame)
+        case FrameKind.FULL_BODY:
+            return decode_full_body_frame(frame)
+        case FrameKind.MEASUREMENT_STATUS:
+            # Only read by the policy (guessed readings).
+            return {}
         case FrameKind.WEIGHT:
             # Not in `reading.frames`: the weight frame makes the reading itself.
             return {}

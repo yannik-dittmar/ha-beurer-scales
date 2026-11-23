@@ -66,6 +66,11 @@ def test_user_list_end_markers(frame: bytes, end: UserListEnd) -> None:
     assert decode_user_list_frame(frame) is end
 
 
+def test_bf990_pads_the_end_marker_with_ff() -> None:
+    """The BF990 sends the end marker as 20 bytes: 01, then 19 × ff (§9.7)."""
+    assert decode_user_list_frame(b"\x01" + b"\xff" * 19) is UserListEnd.COMPLETE
+
+
 @pytest.mark.parametrize(
     "frame", [b"", b"\x03", frames.USER_LIST_ENTRY_SLOT_1[:-1]], ids=repr
 )

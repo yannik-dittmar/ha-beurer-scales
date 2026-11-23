@@ -52,7 +52,13 @@ READING_FRAMES = {
     "BF500": (W, B, (0xFFF5, FrameKind.HEART_RATE)),
     "BF880": (W, B, (0xFFF5, FrameKind.HEART_RATE)),
     "BF980": (W, B, (0xFFF5, FrameKind.HEART_RATE)),
-    # The BF990's 20-byte frames aren't decoded yet (§5.4).
+    "BF990": (
+        W,
+        B,
+        (0xFFF5, FrameKind.HEART_RATE_EXTENDED),
+        (0xFFF7, FrameKind.FULL_BODY),
+        (0xFFF8, FrameKind.MEASUREMENT_STATUS),
+    ),
     "GS435": (W,),
 }
 
@@ -109,6 +115,24 @@ METRICS = {
     "BF500": HEART_RATE_METRICS,
     "BF880": HEART_RATE_METRICS,
     "BF980": HEART_RATE_METRICS,
+    "BF990": HEART_RATE_METRICS
+    | {
+        Metric.AMR,
+        Metric.BONE_MASS,
+        Metric.LEAN_BODY_MASS,
+        Metric.PROTEIN_MASS,
+        Metric.TOTAL_MUSCLE_MASS,
+        Metric.LEFT_ARM_FAT,
+        Metric.RIGHT_ARM_FAT,
+        Metric.LEFT_LEG_FAT,
+        Metric.RIGHT_LEG_FAT,
+        Metric.TORSO_FAT,
+        Metric.LEFT_ARM_MUSCLE,
+        Metric.RIGHT_ARM_MUSCLE,
+        Metric.LEFT_LEG_MUSCLE,
+        Metric.RIGHT_LEG_MUSCLE,
+        Metric.TORSO_MUSCLE,
+    },
     # A weight-only scale: only the BMI of the weight frame.
     "GS435": {Metric.BMI},
 }
@@ -160,6 +184,17 @@ def test_metric_set(name: str) -> None:
 def test_slot_count(name: str, slots: int) -> None:
     """The scale holds as many scale users as the app allows (§4)."""
     assert model_by_name(name).slot_count == slots
+
+
+def test_the_bf990_syncs_earlier_slots_before_it_falls_asleep() -> None:
+    """It stops advertising ~10 s after a tap, so the 25 s wait is too long (§9.7)."""
+    assert model_by_name("BF990").weigh_in_final_delay < 10
+    assert {m.name for m in MODELS if m.weigh_in_final_delay != 25.0} == {"BF990"}
+
+
+def test_the_bf990_offers_no_factory_reset() -> None:
+    """Its FFF7 is the segmental frame; the app resets it elsewhere (§4)."""
+    assert model_by_name("BF990").factory_reset_uuid is None
 
 
 def test_only_the_bf450_type_stores_body_masses_in_tenths() -> None:

@@ -222,6 +222,94 @@ def decode_segment_muscle_frame(frame: bytes) -> dict[Metric, float | None]:
     return _tenths(frame, 1, _SEGMENT_MUSCLE_METRICS)
 
 
+def _pulse(frame: bytes) -> int | None:
+    """Pulse at bytes 1..2; the app treats an `ff` in either byte as no pulse."""
+    if 0xFF in frame[1:3]:
+        return None
+    return _uint16(frame, 1) or None
+
+
+def _metabolic_age(raw: int) -> int | None:
+    return raw if 1 <= raw <= 99 else None
+
+
+# --- BF990 frames (§5.4, verified on a BF990, §9.7) ---
+
+
+def decode_heart_rate_extended_frame(frame: bytes) -> dict[Metric, float | None]:
+    """Decode the BF990's FFF5: 20 bytes, byte 0 unused (`0e` seen).
+
+    Pulse 1..2, visceral fat 3..4 (× 0.1), metabolic age 5, BMR 6..7 and AMR
+    8..9 (kJ), then bone, lean body, protein and total muscle mass (× 0.005 kg)
+    and water % (× 0.1). Without a pulse the scale sends `ff ff`.
+    """
+    _check_length("heart-rate extended", frame, 20)
+    return {
+        Metric.HEART_RATE: _pulse(frame),
+        Metric.VISCERAL_FAT: _scaled(_uint16(frame, 3), 0.1, 1),
+        Metric.METABOLIC_AGE: _metabolic_age(frame[5]),
+        Metric.BMR: _kcal(_uint16(frame, 6)),
+        Metric.AMR: _kcal(_uint16(frame, 8)),
+        Metric.BONE_MASS: _scaled(_uint16(frame, 10), 0.005, 3),
+        Metric.LEAN_BODY_MASS: _scaled(_uint16(frame, 12), 0.005, 3),
+        Metric.PROTEIN_MASS: _scaled(_uint16(frame, 14), 0.005, 3),
+        Metric.TOTAL_MUSCLE_MASS: _scaled(_uint16(frame, 16), 0.005, 3),
+        Metric.BODY_WATER: _scaled(_uint16(frame, 18), 0.1, 1),
+    }
+
+
+_FULL_BODY_METRICS = (
+    Metric.LEFT_LEG_FAT,
+    Metric.RIGHT_LEG_FAT,
+    Metric.LEFT_ARM_FAT,
+    Metric.RIGHT_ARM_FAT,
+    Metric.TORSO_FAT,
+    Metric.LEFT_LEG_MUSCLE,
+    Metric.RIGHT_LEG_MUSCLE,
+    Metric.LEFT_ARM_MUSCLE,
+    Metric.RIGHT_ARM_MUSCLE,
+    Metric.TORSO_MUSCLE,
+)
+
+
+def decode_full_body_frame(frame: bytes) -> dict[Metric, float | None]:
+    """Decode the BF990's segmental analysis FFF7: 20 bytes, ten values × 0.1 %.
+
+    Fat of left leg, right leg, left arm, right arm, torso, then muscle in the
+    same order. All zeros when the weigh-in had no segmental analysis.
+    """
+    _check_length("full body", frame, 20)
+    return _tenths(frame, 0, _FULL_BODY_METRICS)
+
+
+@dataclass(frozen=True, slots=True)
+class MeasurementStatusFrame:
+    """The BF990's FFF8 frame: two impedances and the unknown-user flag."""
+
+    # Bytes 0..1 equal the 2A9C impedance in whole ohms; 2..3 is a second
+    # impedance path (meaning not confirmed).
+    impedance_ohm: int
+    second_impedance_ohm: int
+    # Bytes 4..5 > 0: the scale couldn't tell whose reading this is (app's
+    # `isUnknownMeasurement`).
+    unknown_user: int
+
+    @property
+    def guessed(self) -> bool:
+        """Whether the scale only guessed whose reading this is (ADR 0006)."""
+        return self.unknown_user != 0
+
+
+def decode_measurement_status_frame(frame: bytes) -> MeasurementStatusFrame:
+    """Decode the BF990's FFF8: 6 bytes."""
+    _check_length("measurement status", frame, 6)
+    return MeasurementStatusFrame(
+        impedance_ohm=_uint16(frame, 0),
+        second_impedance_ohm=_uint16(frame, 2),
+        unknown_user=_uint16(frame, 4),
+    )
+
+
 def decode_heart_rate_frame(frame: bytes) -> dict[Metric, float | None]:
     """Decode the heart-rate frame on FFF5 of the BF500/BF880/BF980: 6 bytes."""
     _check_length("heart rate", frame, 6)
